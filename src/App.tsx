@@ -1,297 +1,255 @@
 import {
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   LayoutDashboard,
   ListOrdered,
+  LogOut,
   Moon,
   PieChart,
   Plus,
   Sparkles,
   Sun,
+  User as UserIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AIAssistantPanel } from './components/AIAssistantPanel';
+import { AuthLoadingScreen } from './components/AuthLoadingScreen';
+import { AuthScreen } from './components/AuthScreen';
 import { BudgetsScreen } from './components/BudgetsScreen';
 import { LedgerScreen } from './components/LedgerScreen';
 import { NewTransactionModal } from './components/NewTransactionModal';
 import { OverviewScreen } from './components/OverviewScreen';
+import { ResetPasswordScreen } from './components/ResetPasswordScreen';
 import { ScheduledScreen } from './components/ScheduledScreen';
-import {
-  CATEGORY_MAP,
-  INITIAL_BUDGETS,
-  INITIAL_CHAT,
-  INITIAL_SCHEDULED,
-  INITIAL_TRANSACTIONS,
-} from './data/initialData';
+import { useAuth } from './contexts/AuthContext';
+import { useBudgets } from './hooks/useBudgets';
+import { useCategories } from './hooks/useCategories';
+import { useDashboard } from './hooks/useDashboard';
+import { useExpenses } from './hooks/useExpenses';
+import { useScheduled } from './hooks/useScheduled';
+import { useTheme } from './hooks/useTheme';
+import { api } from './lib/api';
 import type {
-  BudgetLimit,
-  CategoryId,
   ChatMessage,
+  Expense,
+  ExpenseFilters,
   PaymentMethod,
-  ScheduledTransfer,
   ScreenId,
-  Transaction,
-} from './types/finance';
-import { formatCurrencyInline } from './utils/format';
+} from './types';
+import {
+  formatCurrencyInline,
+  formatMonthLabel,
+  getCurrentSaoPauloMonth,
+  getCurrentSaoPauloTimeLabel,
+} from './utils/format';
 
-const BASE_STARTING_BALANCE = 6172.3;
-
-function getCurrentTimeLabel() {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+function shiftMonth(monthStr: string, delta: number): string {
+  const [y, m] = monthStr.split('-').map(Number);
+  const date = new Date(y, (m || 1) - 1 + delta, 1);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
 }
 
-export default function App() {
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('gastoia_theme') !== 'light';
-    } catch {
-      return true;
-    }
-  });
+interface WorkspaceProps {
+  displayName: string;
+  userEmail: string;
+  darkMode: boolean;
+  onToggleTheme: () => void;
+  onSignOut: () => Promise<void>;
+}
 
+function AuthenticatedWorkspace({
+  displayName,
+  userEmail,
+  darkMode,
+  onToggleTheme,
+  onSignOut,
+}: WorkspaceProps) {
   const [screen, setScreen] = useState<ScreenId>('overview');
+  const [selectedMonth, setSelectedMonth] = useState<string>(
+    getCurrentSaoPauloMonth
+  );
 
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('gastoia_transactions');
-      return saved ? JSON.parse(saved) : INITIAL_TRANSACTIONS;
-    } catch {
-      return INITIAL_TRANSACTIONS;
-    }
+  const [expenseFilters, setExpenseFilters] = useState<ExpenseFilters>({
+    month: selectedMonth,
+    search: '',
+    type: 'all',
+    category_id: 'all',
   });
 
-  const [budgets, setBudgets] = useState<BudgetLimit[]>(() => {
-    try {
-      const saved = localStorage.getItem('gastoia_budgets');
-      return saved ? JSON.parse(saved) : INITIAL_BUDGETS;
-    } catch {
-      return INITIAL_BUDGETS;
-    }
-  });
+  useEffect(() => {
+    setExpenseFilters((prev) => ({ ...prev, month: selectedMonth }));
+  }, [selectedMonth]);
 
-  const [scheduled, setScheduled] = useState<ScheduledTransfer[]>(() => {
-    try {
-      const saved = localStorage.getItem('gastoia_scheduled');
-      return saved ? JSON.parse(saved) : INITIAL_SCHEDULED;
-    } catch {
-      return INITIAL_SCHEDULED;
-    }
-  });
+  const dashboardState = useDashboard(selectedMonth);
+  const expensesState = useExpenses(expenseFilters);
+  const categoriesState = useCategories();
+  const budgetsState = useBudgets(selectedMonth);
+  const scheduledState = useScheduled();
 
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(INITIAL_CHAT);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) {
-      root.classList.add('dark');
-      localStorage.setItem('gastoia_theme', 'dark');
-    } else {
-      root.classList.remove('dark');
-      localStorage.setItem('gastoia_theme', 'light');
-    }
-  }, [darkMode]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gastoia_transactions', JSON.stringify(transactions));
-    } catch {
-      // ignore storage quota errors
-    }
-  }, [transactions]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gastoia_budgets', JSON.stringify(budgets));
-    } catch {
-      // ignore
-    }
-  }, [budgets]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gastoia_scheduled', JSON.stringify(scheduled));
-    } catch {
-      // ignore
-    }
-  }, [scheduled]);
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => {
       setToast((curr) => (curr === msg ? null : curr));
-    }, 3200);
+    }, 3400);
   };
 
-  const { monthlyIncome, monthlyExpenses, balance } = useMemo(() => {
-    const income = transactions
-      .filter((t) => t.type === 'income')
-      .reduce((acc, t) => acc + t.amount, 0);
-    const expenses = transactions
-      .filter((t) => t.type === 'expense')
-      .reduce((acc, t) => acc + t.amount, 0);
-    return {
-      monthlyIncome: income,
-      monthlyExpenses: expenses,
-      balance: BASE_STARTING_BALANCE + income - expenses,
-    };
-  }, [transactions]);
-
-  const buildAIContext = () => ({
-    balance,
-    monthlyIncome,
-    monthlyExpenses,
-    categories: budgets.map((b) => ({
-      name: CATEGORY_MAP[b.category].label,
-      spent: transactions
-        .filter((t) => t.type === 'expense' && t.category === b.category)
-        .reduce((acc, t) => acc + t.amount, 0),
-      limit: b.limit,
-    })),
-    recentTransactions: transactions.slice(0, 12).map((t) => ({
-      title: t.title,
-      amount: t.amount,
-      type: t.type,
-      category: CATEGORY_MAP[t.category].label,
-      date: t.date,
-    })),
-  });
-
-  const handleCreateTransaction = (tx: Omit<Transaction, 'id'>) => {
-    const newTx: Transaction = {
-      ...tx,
-      id: `tx-${Date.now()}`,
-    };
-    setTransactions((prev) => [newTx, ...prev]);
-    showToast(
-      `${tx.type === 'income' ? 'Receita' : 'Gasto'} registrado: ${tx.title}`
-    );
+  const refetchFinanceViews = () => {
+    dashboardState.refetch();
+    expensesState.refetch();
+    budgetsState.refetch();
+    scheduledState.refetch();
   };
 
-  const handleRecategorize = (id: string, category: CategoryId) => {
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, category } : t))
-    );
-    setSelectedTx((curr) => (curr && curr.id === id ? { ...curr, category } : curr));
-    showToast(`Categoria atualizada para ${CATEGORY_MAP[category].label}`);
+  const handleCreateExpense = async (payload: {
+    title: string;
+    amount_cents: number;
+    type: 'expense' | 'income';
+    category_id: string;
+    payment_method: PaymentMethod;
+    occurred_at: string;
+    notes?: string;
+  }) => {
+    try {
+      const created = await api.createExpense(payload);
+      refetchFinanceViews();
+      showToast(
+        `${created.type === 'income' ? 'Receita' : 'Gasto'} registrado: ${
+          created.title
+        }`
+      );
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao salvar lançamento.'
+      );
+      throw err;
+    }
   };
 
-  const handleDeleteTransaction = (id: string) => {
-    setTransactions((prev) => prev.filter((t) => t.id !== id));
-    showToast('Lançamento removido.');
+  const handleRecategorize = async (id: string, categoryId: string) => {
+    try {
+      const updated = await api.updateExpense(id, { category_id: categoryId });
+      setSelectedExpense((curr) => (curr && curr.id === id ? updated : curr));
+      refetchFinanceViews();
+      showToast('Categoria atualizada.');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao atualizar categoria.'
+      );
+    }
   };
 
-  const handleUpdateBudgetLimit = (
-    category: Exclude<CategoryId, 'income'>,
-    limit: number
+  const handleDeleteExpense = async (id: string) => {
+    try {
+      await api.deleteExpense(id);
+      refetchFinanceViews();
+      showToast('Lançamento removido.');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao remover lançamento.'
+      );
+    }
+  };
+
+  const handleUpdateBudgetLimit = async (
+    categoryId: string,
+    limitCents: number
   ) => {
-    setBudgets((prev) =>
-      prev.map((b) => (b.category === category ? { ...b, limit } : b))
-    );
+    try {
+      await api.upsertBudget({
+        category_id: categoryId,
+        month: selectedMonth,
+        limit_cents: limitCents,
+      });
+      budgetsState.refetch();
+      dashboardState.refetch();
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao atualizar orçamento.'
+      );
+    }
   };
 
-  const handlePayScheduled = (id: string) => {
-    const target = scheduled.find((s) => s.id === id);
-    if (!target || target.status === 'paid') return;
-
-    setScheduled((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, status: 'paid' } : s))
-    );
-
-    const newTx: Transaction = {
-      id: `tx-${Date.now()}`,
-      title: target.title,
-      amount: target.amount,
-      type: 'expense',
-      category: target.category,
-      paymentMethod: 'Pix',
-      date: `2026-11-14T${getCurrentTimeLabel()}`,
-      notes: `Pagamento agendado · ${target.recipient}`,
-    };
-    setTransactions((prev) => [newTx, ...prev]);
-    showToast(`Pago: ${target.title} (${formatCurrencyInline(target.amount)})`);
+  const handlePayScheduled = async (id: string) => {
+    try {
+      const result = await api.payScheduled(id);
+      refetchFinanceViews();
+      showToast(
+        `Pago: ${result.scheduled.title} (${formatCurrencyInline(
+          result.scheduled.amount_cents
+        )})`
+      );
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao liquidar pagamento.'
+      );
+    }
   };
 
-  const handleToggleAutoPay = (id: string) => {
-    setScheduled((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, autoPay: !s.autoPay } : s))
-    );
+  const handleToggleAutoPay = async (id: string, nextAutoPay: boolean) => {
+    try {
+      await api.toggleScheduledAutoPay(id, nextAutoPay);
+      scheduledState.refetch();
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao atualizar agendamento.'
+      );
+    }
   };
 
-  const handleAddScheduled = (item: Omit<ScheduledTransfer, 'id' | 'status'>) => {
-    const created: ScheduledTransfer = {
-      ...item,
-      id: `sch-${Date.now()}`,
-      status: 'scheduled',
-    };
-    setScheduled((prev) => [created, ...prev]);
-    showToast(`Agendamento salvo: ${item.title}`);
+  const handleAddScheduled = async (item: {
+    title: string;
+    recipient: string;
+    amount_cents: number;
+    category_id: string;
+    due_date: string;
+    recurrence: 'Mensal' | 'Única' | 'Anual';
+    auto_pay: boolean;
+  }) => {
+    try {
+      await api.createScheduled(item);
+      scheduledState.refetch();
+      dashboardState.refetch();
+      showToast(`Agendamento salvo: ${item.title}`);
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao salvar agendamento.'
+      );
+      throw err;
+    }
   };
 
   const handleSendAIPrompt = async (text: string) => {
+    setLastPrompt(text);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`,
       role: 'user',
       content: text,
-      timestamp: getCurrentTimeLabel(),
+      timestamp: getCurrentSaoPauloTimeLabel(),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setAiLoading(true);
 
     try {
-      const res = await fetch('/api/ai/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: text,
-          context: buildAIContext(),
-        }),
-      });
-      const data = await res.json();
+      const data = await api.askAssistant(text, selectedMonth);
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao consultar GastoIA.');
-      }
-
-      let createdId: string | undefined;
-      if (data.intent === 'create_transaction' && data.transaction?.amount > 0) {
-        const validCategory = (
-          ['food', 'transport', 'education', 'leisure', 'other', 'income'].includes(
-            data.transaction.category
-          )
-            ? data.transaction.category
-            : data.transaction.type === 'income'
-            ? 'income'
-            : 'other'
-        ) as CategoryId;
-
-        const validMethod = (
-          ['Pix', 'Crédito', 'Débito', 'Transferência', 'Dinheiro'].includes(
-            data.transaction.paymentMethod
-          )
-            ? data.transaction.paymentMethod
-            : 'Pix'
-        ) as PaymentMethod;
-
-        const newTx: Transaction = {
-          id: `tx-ai-${Date.now()}`,
-          title: data.transaction.title || 'Lançamento GastoIA',
-          amount: Number(data.transaction.amount),
-          type: data.transaction.type === 'income' ? 'income' : 'expense',
-          category: validCategory,
-          paymentMethod: validMethod,
-          date: `2026-11-14T${getCurrentTimeLabel()}`,
-          notes: data.transaction.notes,
-          aiParsed: true,
-        };
-        createdId = newTx.id;
-        setTransactions((prev) => [newTx, ...prev]);
+      if (data.created_expense) {
+        refetchFinanceViews();
         showToast(
-          `Registrado via IA: ${newTx.title} (${formatCurrencyInline(newTx.amount)})`
+          `Registrado via IA: ${data.created_expense.title} (${formatCurrencyInline(
+            data.created_expense.amount_cents
+          )})`
         );
       }
 
@@ -300,12 +258,13 @@ export default function App() {
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          content: data.reply || 'Pronto!',
-          timestamp: getCurrentTimeLabel(),
-          createdTransactionId: createdId,
+          content: data.reply,
+          timestamp: getCurrentSaoPauloTimeLabel(),
+          created_expense_id: data.created_expense?.id,
+          draft: data.draft,
         },
       ]);
-    } catch (err: unknown) {
+    } catch (err) {
       setChatMessages((prev) => [
         ...prev,
         {
@@ -315,7 +274,7 @@ export default function App() {
             err instanceof Error
               ? err.message
               : 'Não foi possível completar a solicitação.',
-          timestamp: getCurrentTimeLabel(),
+          timestamp: getCurrentSaoPauloTimeLabel(),
           error: true,
         },
       ]);
@@ -329,7 +288,7 @@ export default function App() {
       id: `u-img-${Date.now()}`,
       role: 'user',
       content: `Comprovante enviado: ${file.name}`,
-      timestamp: getCurrentTimeLabel(),
+      timestamp: getCurrentSaoPauloTimeLabel(),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setAiLoading(true);
@@ -342,52 +301,14 @@ export default function App() {
         reader.readAsDataURL(file);
       });
 
-      const res = await fetch('/api/ai/receipt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: base64,
-          mimeType: file.type || 'image/jpeg',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Erro ao analisar comprovante.');
-      }
+      const data = await api.parseReceipt(base64, file.type || 'image/jpeg');
 
-      let createdId: string | undefined;
-      if (data.readable && data.transaction?.amount > 0) {
-        const validCategory = (
-          ['food', 'transport', 'education', 'leisure', 'other', 'income'].includes(
-            data.transaction.category
-          )
-            ? data.transaction.category
-            : 'other'
-        ) as CategoryId;
-
-        const validMethod = (
-          ['Pix', 'Crédito', 'Débito', 'Transferência', 'Dinheiro'].includes(
-            data.transaction.paymentMethod
-          )
-            ? data.transaction.paymentMethod
-            : 'Pix'
-        ) as PaymentMethod;
-
-        const newTx: Transaction = {
-          id: `tx-ocr-${Date.now()}`,
-          title: data.transaction.title || 'Recibo Digitalizado',
-          amount: Number(data.transaction.amount),
-          type: data.transaction.type === 'income' ? 'income' : 'expense',
-          category: validCategory,
-          paymentMethod: validMethod,
-          date: `2026-11-14T${getCurrentTimeLabel()}`,
-          notes: data.transaction.notes,
-          aiParsed: true,
-        };
-        createdId = newTx.id;
-        setTransactions((prev) => [newTx, ...prev]);
+      if (data.created_expense) {
+        refetchFinanceViews();
         showToast(
-          `Recibo lançado: ${newTx.title} (${formatCurrencyInline(newTx.amount)})`
+          `Recibo lançado: ${data.created_expense.title} (${formatCurrencyInline(
+            data.created_expense.amount_cents
+          )})`
         );
       }
 
@@ -396,12 +317,13 @@ export default function App() {
         {
           id: `a-ocr-${Date.now()}`,
           role: 'assistant',
-          content: data.reply || 'Comprovante processado.',
-          timestamp: getCurrentTimeLabel(),
-          createdTransactionId: createdId,
+          content: data.reply,
+          timestamp: getCurrentSaoPauloTimeLabel(),
+          created_expense_id: data.created_expense?.id,
+          draft: data.draft,
         },
       ]);
-    } catch (err: unknown) {
+    } catch (err) {
       setChatMessages((prev) => [
         ...prev,
         {
@@ -411,7 +333,7 @@ export default function App() {
             err instanceof Error
               ? err.message
               : 'Erro ao processar imagem do recibo.',
-          timestamp: getCurrentTimeLabel(),
+          timestamp: getCurrentSaoPauloTimeLabel(),
           error: true,
         },
       ]);
@@ -420,38 +342,30 @@ export default function App() {
     }
   };
 
-  const handleExplainTransactionInline = async (tx: Transaction): Promise<string> => {
+  const handleExplainExpenseInline = async (
+    expense: Expense
+  ): Promise<string> => {
     try {
-      const res = await fetch('/api/ai/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'explain_transaction',
-          transaction: {
-            title: tx.title,
-            amount: tx.amount,
-            type: tx.type,
-            category: CATEGORY_MAP[tx.category].label,
-            date: tx.date,
-            paymentMethod: tx.paymentMethod,
-          },
-          context: buildAIContext(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      return data.explanation || 'Sem análise disponível.';
-    } catch (err: unknown) {
+      const res = await api.explainExpense(expense.id);
+      return res.explanation || 'Sem análise disponível.';
+    } catch (err) {
       return err instanceof Error
         ? err.message
         : 'Não foi possível gerar explicação.';
     }
   };
 
-  const handleExplainFromRow = async (tx: Transaction) => {
-    setSelectedTx(tx);
+  const handleExplainFromRow = (expense: Expense) => {
+    setSelectedExpense(expense);
     setModalOpen(true);
   };
+
+  const categories = categoriesState.data ?? [];
+  const expensesList =
+    expensesState.data ?? dashboardState.data?.recent_expenses ?? [];
+  const userInitial = (displayName || userEmail || 'U')
+    .charAt(0)
+    .toUpperCase();
 
   const navItems: Array<{
     id: ScreenId;
@@ -469,22 +383,22 @@ export default function App() {
       case 'overview':
         return (
           <OverviewScreen
-            balance={balance}
-            monthlyIncome={monthlyIncome}
-            monthlyExpenses={monthlyExpenses}
-            transactions={transactions}
-            budgets={budgets}
-            scheduled={scheduled}
+            month={selectedMonth}
+            dashboard={dashboardState.data}
+            categories={categories}
+            loading={dashboardState.loading}
+            error={dashboardState.error}
+            onRetry={dashboardState.refetch}
             onNavigate={setScreen}
             onOpenNewModal={() => {
-              setSelectedTx(null);
+              setSelectedExpense(null);
               setModalOpen(true);
             }}
-            onExplainTransaction={handleExplainFromRow}
+            onExplainExpense={handleExplainFromRow}
             onRecategorize={handleRecategorize}
-            onDeleteTransaction={handleDeleteTransaction}
-            onSelectTransaction={(tx) => {
-              setSelectedTx(tx);
+            onDeleteExpense={handleDeleteExpense}
+            onSelectExpense={(exp) => {
+              setSelectedExpense(exp);
               setModalOpen(true);
             }}
             onPayScheduled={handlePayScheduled}
@@ -493,16 +407,23 @@ export default function App() {
       case 'ledger':
         return (
           <LedgerScreen
-            transactions={transactions}
+            month={selectedMonth}
+            expenses={expensesState.data}
+            categories={categories}
+            filters={expenseFilters}
+            loading={expensesState.loading}
+            error={expensesState.error}
+            onFiltersChange={setExpenseFilters}
+            onRetry={expensesState.refetch}
             onOpenNewModal={() => {
-              setSelectedTx(null);
+              setSelectedExpense(null);
               setModalOpen(true);
             }}
-            onExplainTransaction={handleExplainFromRow}
+            onExplainExpense={handleExplainFromRow}
             onRecategorize={handleRecategorize}
-            onDeleteTransaction={handleDeleteTransaction}
-            onSelectTransaction={(tx) => {
-              setSelectedTx(tx);
+            onDeleteExpense={handleDeleteExpense}
+            onSelectExpense={(exp) => {
+              setSelectedExpense(exp);
               setModalOpen(true);
             }}
           />
@@ -510,17 +431,23 @@ export default function App() {
       case 'budgets':
         return (
           <BudgetsScreen
-            budgets={budgets}
-            transactions={transactions}
-            monthlyIncome={monthlyIncome}
-            monthlyExpenses={monthlyExpenses}
+            month={selectedMonth}
+            budgets={budgetsState.data}
+            categories={categories}
+            loading={budgetsState.loading}
+            error={budgetsState.error}
+            onRetry={budgetsState.refetch}
             onUpdateLimit={handleUpdateBudgetLimit}
           />
         );
       case 'scheduled':
         return (
           <ScheduledScreen
-            scheduled={scheduled}
+            scheduled={scheduledState.data}
+            categories={categories}
+            loading={scheduledState.loading}
+            error={scheduledState.error}
+            onRetry={scheduledState.refetch}
             onPayScheduled={handlePayScheduled}
             onToggleAutoPay={handleToggleAutoPay}
             onAddScheduled={handleAddScheduled}
@@ -542,8 +469,11 @@ export default function App() {
               isLoading={aiLoading}
               onSendPrompt={handleSendAIPrompt}
               onUploadReceipt={handleUploadReceipt}
-              onUndoTransaction={handleDeleteTransaction}
-              transactions={transactions}
+              onUndoExpense={handleDeleteExpense}
+              onRetryLast={
+                lastPrompt ? () => handleSendAIPrompt(lastPrompt) : undefined
+              }
+              expenses={expensesList}
               className="h-[calc(100vh-220px)] min-h-[460px]"
             />
           </div>
@@ -553,7 +483,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--text-primary)] transition-colors">
-      {/* Mobile / Tablet Compact Sticky Header (<= 56px) */}
+      {/* Cabeçalho compacto mobile com usuário e sair */}
       <header className="lg:hidden sticky top-0 z-30 h-[52px] px-5 glass-surface border-x-0 border-t-0 flex items-center justify-between gap-4">
         <a
           href="#overview"
@@ -566,21 +496,56 @@ export default function App() {
           GastoIA
         </a>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 relative">
           <button
             type="button"
-            onClick={() => setDarkMode((v) => !v)}
+            onClick={onToggleTheme}
             aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo escuro'}
             className="w-10 h-10 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
           >
             {darkMode ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+
+          <button
+            type="button"
+            onClick={() => setProfileMenuOpen((v) => !v)}
+            aria-label="Perfil do usuário"
+            className="h-9 px-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--border-subtle)] flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)] cursor-pointer"
+          >
+            <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[11px] font-bold">
+              {userInitial}
+            </span>
+            <span className="max-w-[90px] truncate">{displayName}</span>
+          </button>
+
+          {profileMenuOpen && (
+            <div
+              className="absolute right-0 top-12 w-64 p-3 rounded-2xl glass-surface shadow-xl space-y-3 z-40"
+              onMouseLeave={() => setProfileMenuOpen(false)}
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-[var(--text-primary)] truncate">
+                  {displayName}
+                </p>
+                <p className="text-xs text-[var(--text-muted)] truncate">
+                  {userEmail}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="w-full flex items-center justify-center gap-2 h-9 rounded-xl bg-rose-500/12 text-rose-400 hover:bg-rose-500/20 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <LogOut size={14} />
+                <span>Sair da conta</span>
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      {/* Desktop 1440px Multi-Panel Command Center + Responsive Reflow */}
       <div className="max-w-[1440px] mx-auto flex">
-        {/* Fixed 260px Left Sidebar (Desktop) */}
+        {/* Barra lateral fixa 260px (Desktop) */}
         <aside className="hidden lg:flex lg:flex-col lg:w-[260px] lg:shrink-0 lg:sticky lg:top-0 lg:h-screen border-r border-[var(--border-subtle)] bg-[var(--surface-lowest)]/60 p-6 justify-between">
           <div className="space-y-8">
             <a
@@ -617,27 +582,86 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="space-y-3 pt-6 border-t border-[var(--border-subtle)]">
+          {/* Perfil real e tema na barra lateral */}
+          <div className="space-y-3 pt-5 border-t border-[var(--border-subtle)]">
+            <div className="flex items-center gap-3 px-1">
+              <div className="w-9 h-9 rounded-full bg-indigo-500/15 text-indigo-400 flex items-center justify-center font-bold text-sm shrink-0">
+                {userInitial || <UserIcon size={16} />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-[var(--text-primary)] truncate">
+                  {displayName}
+                </p>
+                <p className="text-[11px] text-[var(--text-muted)] truncate">
+                  {userEmail}
+                </p>
+              </div>
+            </div>
+
             <button
               type="button"
-              onClick={() => setDarkMode((v) => !v)}
+              onClick={onToggleTheme}
               className="w-full flex items-center justify-between px-3.5 h-10 rounded-xl text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
             >
               <span>{darkMode ? 'Tema escuro' : 'Tema claro'}</span>
               {darkMode ? <Sun size={16} /> : <Moon size={16} />}
             </button>
+
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="w-full flex items-center justify-between px-3.5 h-10 rounded-xl text-xs font-semibold text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+            >
+              <span>Sair</span>
+              <LogOut size={15} />
+            </button>
           </div>
         </aside>
 
-        {/* Primary Content + Desktop 4-Col AI Rail */}
+        {/* Área principal */}
         <main className="flex-1 min-w-0 px-5 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-8">
+          {/* Topo desktop com seletor de mês e identificação do usuário */}
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
+            <div className="inline-flex items-center gap-1 rounded-xl bg-[var(--surface-1)] border border-[var(--border-subtle)] p-1">
+              <button
+                type="button"
+                onClick={() => setSelectedMonth((m) => shiftMonth(m, -1))}
+                aria-label="Mês anterior"
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="px-3 text-xs sm:text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">
+                {formatMonthLabel(selectedMonth)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedMonth((m) => shiftMonth(m, 1))}
+                aria-label="Próximo mês"
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+
+            <div className="hidden lg:flex items-center gap-3 text-xs text-[var(--text-muted)]">
+              <span className="font-medium text-[var(--text-secondary)]">
+                {displayName}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>{userEmail}</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-            {/* Primary Analytical Workspace (8 cols on xl) */}
-            <div className={screen === 'assistant' ? 'xl:col-span-12' : 'xl:col-span-8'}>
+            <div
+              className={
+                screen === 'assistant' ? 'xl:col-span-12' : 'xl:col-span-8'
+              }
+            >
               {renderMainScreen()}
             </div>
 
-            {/* Persistent AI Assistant Rail on Desktop (4 cols on xl) */}
             {screen !== 'assistant' && (
               <div className="hidden lg:block xl:col-span-4 lg:sticky lg:top-6">
                 <AIAssistantPanel
@@ -645,8 +669,11 @@ export default function App() {
                   isLoading={aiLoading}
                   onSendPrompt={handleSendAIPrompt}
                   onUploadReceipt={handleUploadReceipt}
-                  onUndoTransaction={handleDeleteTransaction}
-                  transactions={transactions}
+                  onUndoExpense={handleDeleteExpense}
+                  onRetryLast={
+                    lastPrompt ? () => handleSendAIPrompt(lastPrompt) : undefined
+                  }
+                  expenses={expensesList}
                   className="h-[calc(100vh-48px)] max-h-[780px]"
                 />
               </div>
@@ -655,7 +682,7 @@ export default function App() {
         </main>
       </div>
 
-      {/* Mobile Persistent Bottom Tab Bar (Compact 58px height) */}
+      {/* Barra inferior mobile */}
       <nav
         aria-label="Navegação mobile"
         className="lg:hidden fixed bottom-0 left-0 right-0 z-40 h-[58px] glass-surface border-x-0 border-b-0 px-2 grid grid-cols-5 items-center"
@@ -694,7 +721,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => {
-              setSelectedTx(null);
+              setSelectedExpense(null);
               setModalOpen(true);
             }}
             aria-label="Novo lançamento"
@@ -735,7 +762,6 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Dynamic Toast Notification */}
       {toast && (
         <div
           role="status"
@@ -746,19 +772,75 @@ export default function App() {
         </div>
       )}
 
-      {/* Transaction Create / Inspect Modal */}
       <NewTransactionModal
         open={modalOpen}
-        selectedTransaction={selectedTx}
+        categories={categories}
+        selectedExpense={selectedExpense}
         onClose={() => {
           setModalOpen(false);
-          setSelectedTx(null);
+          setSelectedExpense(null);
         }}
-        onCreate={handleCreateTransaction}
+        onCreate={handleCreateExpense}
         onUpdateCategory={handleRecategorize}
-        onDelete={handleDeleteTransaction}
-        onExplain={handleExplainTransactionInline}
+        onDelete={handleDeleteExpense}
+        onExplain={handleExplainExpenseInline}
       />
     </div>
+  );
+}
+
+export default function App() {
+  const { darkMode, toggleTheme } = useTheme();
+  const {
+    status,
+    configError,
+    supabase,
+    session,
+    user,
+    displayName,
+    cacheEpoch,
+    retryInit,
+    signOut,
+    clearRecoveryMode,
+  } = useAuth();
+
+  if (status === 'loading' || status === 'config_error') {
+    return <AuthLoadingScreen error={configError} onRetry={retryInit} />;
+  }
+
+  if (status === 'recovery' && supabase) {
+    return (
+      <ResetPasswordScreen
+        supabase={supabase}
+        hasSession={Boolean(session)}
+        darkMode={darkMode}
+        onToggleTheme={toggleTheme}
+        onDone={clearRecoveryMode}
+      />
+    );
+  }
+
+  if (status === 'unauthenticated' || !session || !supabase) {
+    if (!supabase) {
+      return <AuthLoadingScreen error={configError} onRetry={retryInit} />;
+    }
+    return (
+      <AuthScreen
+        supabase={supabase}
+        darkMode={darkMode}
+        onToggleTheme={toggleTheme}
+      />
+    );
+  }
+
+  return (
+    <AuthenticatedWorkspace
+      key={cacheEpoch}
+      displayName={displayName}
+      userEmail={user?.email ?? ''}
+      darkMode={darkMode}
+      onToggleTheme={toggleTheme}
+      onSignOut={signOut}
+    />
   );
 }

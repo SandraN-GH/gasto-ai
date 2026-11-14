@@ -1,84 +1,96 @@
 import {
   ArrowDownLeft,
   ArrowUpRight,
-  CalendarClock,
   ChevronRight,
   Plus,
 } from 'lucide-react';
-import { CATEGORY_MAP } from '../data/initialData';
 import type {
-  BudgetLimit,
-  CategoryId,
-  ScheduledTransfer,
+  Category,
+  DashboardData,
+  Expense,
   ScreenId,
-  Transaction,
-} from '../types/finance';
-import { formatCurrencyInline, formatShortDueDate } from '../utils/format';
+} from '../types';
+import {
+  formatCurrencyInline,
+  formatDueDateBR,
+  formatMonthLabel,
+} from '../utils/format';
 import { CashflowChart } from './CashflowChart';
 import { CategoryIcon } from './CategoryIcon';
 import { CurrencyValue } from './CurrencyValue';
+import {
+  EmptyStateCard,
+  ErrorStateCard,
+  OverviewSkeleton,
+} from './ScreenStates';
 import { TransactionRow } from './TransactionRow';
 
 interface OverviewScreenProps {
-  balance: number;
-  monthlyIncome: number;
-  monthlyExpenses: number;
-  transactions: Transaction[];
-  budgets: BudgetLimit[];
-  scheduled: ScheduledTransfer[];
+  month: string;
+  dashboard: DashboardData | null;
+  categories: Category[];
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
   onNavigate: (screen: ScreenId) => void;
   onOpenNewModal: () => void;
-  onExplainTransaction: (tx: Transaction) => void;
-  onRecategorize: (id: string, category: CategoryId) => void;
-  onDeleteTransaction: (id: string) => void;
-  onSelectTransaction: (tx: Transaction) => void;
+  onExplainExpense: (expense: Expense) => void;
+  onRecategorize: (id: string, categoryId: string) => void;
+  onDeleteExpense: (id: string) => void;
+  onSelectExpense: (expense: Expense) => void;
   onPayScheduled: (id: string) => void;
 }
 
 export function OverviewScreen({
-  balance,
-  monthlyIncome,
-  monthlyExpenses,
-  transactions,
-  budgets,
-  scheduled,
+  month,
+  dashboard,
+  categories,
+  loading,
+  error,
+  onRetry,
   onNavigate,
   onOpenNewModal,
-  onExplainTransaction,
+  onExplainExpense,
   onRecategorize,
-  onDeleteTransaction,
-  onSelectTransaction,
+  onDeleteExpense,
+  onSelectExpense,
   onPayScheduled,
 }: OverviewScreenProps) {
-  const savingsRate =
-    monthlyIncome > 0
-      ? Math.round(((monthlyIncome - monthlyExpenses) / monthlyIncome) * 100)
-      : 0;
+  if (loading && !dashboard) {
+    return <OverviewSkeleton />;
+  }
 
-  const upcomingScheduled = scheduled
-    .filter((s) => s.status !== 'paid')
-    .slice(0, 3);
+  if (error && !dashboard) {
+    return <ErrorStateCard message={error} onRetry={onRetry} />;
+  }
 
-  const recentTransactions = transactions.slice(0, 5);
+  const isEmpty =
+    !dashboard ||
+    (dashboard.monthly_income_cents === 0 &&
+      dashboard.monthly_expense_cents === 0 &&
+      dashboard.recent_expenses.length === 0 &&
+      dashboard.budgets.length === 0 &&
+      dashboard.upcoming_scheduled.length === 0);
 
-  const categorySpendMap = budgets.map((b) => {
-    const spent = transactions
-      .filter((t) => t.type === 'expense' && t.category === b.category)
-      .reduce((acc, t) => acc + t.amount, 0);
-    const pct = b.limit > 0 ? Math.min(Math.round((spent / b.limit) * 100), 100) : 0;
-    const rawPct = b.limit > 0 ? Math.round((spent / b.limit) * 100) : 0;
-    return {
-      ...b,
-      spent,
-      pct,
-      rawPct,
-      meta: CATEGORY_MAP[b.category],
-    };
-  });
+  if (isEmpty) {
+    return (
+      <div className="space-y-6">
+        <EmptyStateCard
+          variant="overview"
+          title="Sua visão geral está pronta para começar"
+          description={`Nenhum lançamento registrado para ${formatMonthLabel(
+            month
+          )}. Adicione sua primeira receita ou despesa ou use o Assistente GastoIA ao lado.`}
+          actionLabel="Registrar primeiro lançamento"
+          onAction={onOpenNewModal}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Primary Hero Balance & Monthly Summary */}
+      {/* Cartão principal de saldo */}
       <section
         aria-label="Resumo financeiro"
         className="tier-1-card rounded-2xl p-5 sm:p-7 relative overflow-hidden"
@@ -95,11 +107,11 @@ export function OverviewScreen({
         <div className="relative flex flex-col sm:flex-row sm:items-end justify-between gap-6">
           <div>
             <p className="text-xs font-medium text-[var(--text-muted)] tracking-wide">
-              Saldo consolidado · Novembro 2026
+              Saldo consolidado · {formatMonthLabel(dashboard.month)}
             </p>
             <div className="mt-2">
               <CurrencyValue
-                value={balance}
+                value={dashboard.balance_cents}
                 size="display"
                 className="text-[var(--text-primary)]"
               />
@@ -108,14 +120,14 @@ export function OverviewScreen({
               Taxa de economia mensal de{' '}
               <span
                 className={`font-semibold ${
-                  savingsRate >= 20
+                  dashboard.savings_rate >= 20
                     ? 'text-emerald-500 dark:text-[#4edea3]'
-                    : savingsRate > 0
+                    : dashboard.savings_rate > 0
                     ? 'text-amber-500'
                     : 'text-rose-500'
                 }`}
               >
-                {savingsRate}%
+                {dashboard.savings_rate}%
               </span>{' '}
               sobre receitas líquidas
             </p>
@@ -133,7 +145,6 @@ export function OverviewScreen({
           </div>
         </div>
 
-        {/* Inflow / Outflow clean hairline split */}
         <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 pt-6 border-t border-[var(--border-subtle)]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -143,7 +154,7 @@ export function OverviewScreen({
               <div>
                 <p className="text-xs text-[var(--text-muted)]">Receitas do mês</p>
                 <CurrencyValue
-                  value={monthlyIncome}
+                  value={dashboard.monthly_income_cents}
                   size="lg"
                   className="text-emerald-500 dark:text-[#4edea3] mt-0.5"
                 />
@@ -159,7 +170,7 @@ export function OverviewScreen({
               <div>
                 <p className="text-xs text-[var(--text-muted)]">Despesas do mês</p>
                 <CurrencyValue
-                  value={monthlyExpenses}
+                  value={dashboard.monthly_expense_cents}
                   size="lg"
                   className="text-[var(--text-primary)] mt-0.5"
                 />
@@ -169,12 +180,15 @@ export function OverviewScreen({
         </div>
       </section>
 
-      {/* Cashflow Visualization */}
-      <CashflowChart transactions={transactions} />
+      {/* Gráfico de fluxo de caixa */}
+      <CashflowChart
+        series7d={dashboard.cashflow_7d}
+        series30d={dashboard.cashflow_30d}
+        series6m={dashboard.cashflow_6m}
+      />
 
-      {/* Two-Column Balanced Grid: Budgets Snapshot & Scheduled Transfers */}
+      {/* Grade de limites e agendamentos */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-        {/* Category Budgets Snapshot */}
         <section className="tier-1-card rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-2 mb-5">
@@ -196,46 +210,71 @@ export function OverviewScreen({
               </button>
             </div>
 
-            <div className="space-y-4">
-              {categorySpendMap.map((item) => {
-                const isOver = item.rawPct >= 100;
-                const isWarn = item.rawPct >= 80 && item.rawPct < 100;
-                const barColor = isOver
-                  ? '#F43F5E'
-                  : isWarn
-                  ? '#F59E0B'
-                  : item.meta.color;
+            {dashboard.budgets.length === 0 ? (
+              <div className="py-6 text-center space-y-2">
+                <p className="text-sm text-[var(--text-muted)]">
+                  Nenhum orçamento configurado para este mês.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('budgets')}
+                  className="text-xs font-semibold text-indigo-400 hover:underline cursor-pointer"
+                >
+                  Definir limites mensais
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {dashboard.budgets.map((item) => {
+                  const pct =
+                    item.limit_cents > 0
+                      ? Math.min(
+                          Math.round((item.spent_cents / item.limit_cents) * 100),
+                          100
+                        )
+                      : 0;
+                  const rawPct =
+                    item.limit_cents > 0
+                      ? Math.round((item.spent_cents / item.limit_cents) * 100)
+                      : 0;
+                  const isOver = rawPct >= 100;
+                  const isWarn = rawPct >= 80 && rawPct < 100;
+                  const barColor = isOver
+                    ? '#F43F5E'
+                    : isWarn
+                    ? '#F59E0B'
+                    : item.category_color;
 
-                return (
-                  <div key={item.category}>
-                    <div className="flex items-center justify-between text-xs mb-1.5">
-                      <span className="font-medium text-[var(--text-primary)]">
-                        {item.meta.label}
-                      </span>
-                      <span className="tabular-financial text-[var(--text-muted)]">
-                        <strong className="text-[var(--text-primary)] font-semibold">
-                          {formatCurrencyInline(item.spent)}
-                        </strong>{' '}
-                        / {formatCurrencyInline(item.limit)}
-                      </span>
+                  return (
+                    <div key={item.id}>
+                      <div className="flex items-center justify-between text-xs mb-1.5">
+                        <span className="font-medium text-[var(--text-primary)]">
+                          {item.category_name}
+                        </span>
+                        <span className="tabular-financial text-[var(--text-muted)]">
+                          <strong className="text-[var(--text-primary)] font-semibold">
+                            {formatCurrencyInline(item.spent_cents)}
+                          </strong>{' '}
+                          / {formatCurrencyInline(item.limit_cents)}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full rounded-full bg-[var(--surface-2)] overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300"
+                          style={{
+                            width: `${pct}%`,
+                            backgroundColor: barColor,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <div className="h-2 w-full rounded-full bg-[var(--surface-2)] overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all duration-300"
-                        style={{
-                          width: `${item.pct}%`,
-                          backgroundColor: barColor,
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </section>
 
-        {/* Scheduled Transfers Preview */}
         <section className="tier-1-card rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-2 mb-5">
@@ -257,40 +296,49 @@ export function OverviewScreen({
               </button>
             </div>
 
-            {upcomingScheduled.length === 0 ? (
-              <div className="py-8 text-center">
-                <CalendarClock
-                  size={28}
-                  className="mx-auto text-[var(--text-muted)] mb-2"
-                />
+            {dashboard.upcoming_scheduled.length === 0 ? (
+              <div className="py-6 text-center space-y-2">
                 <p className="text-sm text-[var(--text-muted)]">
-                  Todas as contas do período estão pagas.
+                  Nenhum pagamento agendado pendente.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('scheduled')}
+                  className="text-xs font-semibold text-indigo-400 hover:underline cursor-pointer"
+                >
+                  Agendar transferência
+                </button>
               </div>
             ) : (
               <div className="divide-y divide-[var(--border-subtle)]">
-                {upcomingScheduled.map((item) => (
+                {dashboard.upcoming_scheduled.map((item) => (
                   <div
                     key={item.id}
                     className="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-3"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <CategoryIcon category={item.category} size="sm" />
+                      <CategoryIcon
+                        slug={item.category_slug}
+                        color={item.category_color}
+                        size="sm"
+                      />
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-[var(--text-primary)] truncate">
                           {item.title}
                         </p>
                         <p className="text-xs text-[var(--text-muted)] truncate">
-                          Vence {formatShortDueDate(item.dueDate)}
-                          <span className="mx-1.5" aria-hidden="true">·</span>
-                          {item.autoPay ? 'Débito automático' : 'Manual'}
+                          Vence {formatDueDateBR(item.due_date)}
+                          <span className="mx-1.5" aria-hidden="true">
+                            ·
+                          </span>
+                          {item.auto_pay ? 'Débito automático' : 'Manual'}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3 shrink-0">
                       <CurrencyValue
-                        value={item.amount}
+                        value={item.amount_cents}
                         size="sm"
                         className="text-[var(--text-primary)]"
                       />
@@ -310,7 +358,7 @@ export function OverviewScreen({
         </section>
       </div>
 
-      {/* Recent Transactions Ledger */}
+      {/* Últimos Lançamentos */}
       <section className="tier-1-card rounded-2xl p-5 sm:p-6">
         <div className="flex items-center justify-between gap-2 mb-4">
           <div>
@@ -331,18 +379,27 @@ export function OverviewScreen({
           </button>
         </div>
 
-        <div className="divide-y divide-[var(--border-subtle)]">
-          {recentTransactions.map((tx) => (
-            <TransactionRow
-              key={tx.id}
-              transaction={tx}
-              onExplain={onExplainTransaction}
-              onRecategorize={onRecategorize}
-              onDelete={onDeleteTransaction}
-              onSelect={onSelectTransaction}
-            />
-          ))}
-        </div>
+        {dashboard.recent_expenses.length === 0 ? (
+          <div className="py-8 text-center">
+            <p className="text-sm text-[var(--text-muted)]">
+              Você ainda não possui lançamentos neste mês.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-[var(--border-subtle)]">
+            {dashboard.recent_expenses.map((expense) => (
+              <TransactionRow
+                key={expense.id}
+                expense={expense}
+                categories={categories}
+                onExplain={onExplainExpense}
+                onRecategorize={onRecategorize}
+                onDelete={onDeleteExpense}
+                onSelect={onSelectExpense}
+              />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

@@ -1,26 +1,29 @@
 import {
-  Utensils,
   Car,
   GraduationCap,
-  Sparkles,
   Home,
+  Sparkles,
+  Tag,
   TrendingUp,
+  Utensils,
 } from 'lucide-react';
-import { CATEGORY_MAP } from '../data/initialData';
-import type { CategoryId } from '../types/finance';
 
 interface CategoryIconProps {
-  category: CategoryId;
+  slug?: string;
+  color?: string;
   size?: 'sm' | 'md';
 }
 
-export function CategoryIcon({ category, size = 'md' }: CategoryIconProps) {
-  const meta = CATEGORY_MAP[category];
+export function CategoryIcon({
+  slug = 'other',
+  color = '#64748B',
+  size = 'md',
+}: CategoryIconProps) {
   const dims = size === 'sm' ? 'w-8 h-8' : 'w-10 h-10';
   const iconSize = size === 'sm' ? 16 : 18;
 
   const renderIcon = () => {
-    switch (category) {
+    switch (slug) {
       case 'food':
         return <Utensils size={iconSize} strokeWidth={1.9} />;
       case 'transport':
@@ -31,8 +34,10 @@ export function CategoryIcon({ category, size = 'md' }: CategoryIconProps) {
         return <Sparkles size={iconSize} strokeWidth={1.9} />;
       case 'income':
         return <TrendingUp size={iconSize} strokeWidth={1.9} />;
-      default:
+      case 'other':
         return <Home size={iconSize} strokeWidth={1.9} />;
+      default:
+        return <Tag size={iconSize} strokeWidth={1.9} />;
     }
   };
 
@@ -40,9 +45,9 @@ export function CategoryIcon({ category, size = 'md' }: CategoryIconProps) {
     <div
       className={`${dims} rounded-full flex items-center justify-center shrink-0 transition-transform duration-150`}
       style={{
-        backgroundColor: meta.bgTint,
-        color: meta.color,
-        border: `1px solid ${meta.color}28`,
+        backgroundColor: `${color}22`,
+        color,
+        border: `1px solid ${color}33`,
       }}
       aria-hidden="true"
     >

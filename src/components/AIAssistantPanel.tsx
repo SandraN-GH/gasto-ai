@@ -3,27 +3,30 @@ import {
   Loader2,
   Mic,
   MicOff,
+  RefreshCw,
   Send,
   Sparkles,
   Undo2,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { ChatMessage, Transaction } from '../types/finance';
+import type { ChatMessage, Expense } from '../types';
+import { formatCurrencyInline } from '../utils/format';
 
 interface AIAssistantPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
   onSendPrompt: (text: string) => Promise<void>;
   onUploadReceipt: (file: File) => Promise<void>;
-  onUndoTransaction: (txId: string) => void;
-  transactions: Transaction[];
+  onUndoExpense: (expenseId: string) => void;
+  onRetryLast?: () => void;
+  expenses: Expense[];
   className?: string;
 }
 
-const QUICK_PROMPTS = [
-  'Onde estou gastando mais?',
-  'Gastei 38,50 na padaria no Pix',
-  'Consigo economizar R$ 400 este mês?',
+const SUGGESTED_QUESTIONS = [
+  'Onde estou gastando mais neste mês?',
+  'Quanto ainda posso gastar hoje?',
+  'Resuma minhas despesas recentes',
 ];
 
 export function AIAssistantPanel({
@@ -31,8 +34,9 @@ export function AIAssistantPanel({
   isLoading,
   onSendPrompt,
   onUploadReceipt,
-  onUndoTransaction,
-  transactions,
+  onUndoExpense,
+  onRetryLast,
+  expenses,
   className = '',
 }: AIAssistantPanelProps) {
   const [input, setInput] = useState('');
@@ -55,8 +59,17 @@ export function AIAssistantPanel({
 
   const handleVoice = () => {
     const SpeechRec =
-      (window as unknown as { SpeechRecognition?: new () => unknown; webkitSpeechRecognition?: new () => unknown }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: new () => unknown }).webkitSpeechRecognition;
+      (
+        window as unknown as {
+          SpeechRecognition?: new () => unknown;
+          webkitSpeechRecognition?: new () => unknown;
+        }
+      ).SpeechRecognition ||
+      (
+        window as unknown as {
+          webkitSpeechRecognition?: new () => unknown;
+        }
+      ).webkitSpeechRecognition;
 
     if (!SpeechRec) {
       setVoiceNote('Reconhecimento de voz não disponível neste navegador.');
@@ -103,7 +116,6 @@ export function AIAssistantPanel({
       aria-label="Assistente GastoIA"
       className={`tier-1-card rounded-2xl flex flex-col overflow-hidden ${className}`}
     >
-      {/* Header */}
       <div className="px-5 py-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-full bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
@@ -120,46 +132,92 @@ export function AIAssistantPanel({
         </div>
       </div>
 
-      {/* Messages Feed */}
+      {/* Área de mensagens ou estado vazio inicial */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[260px]">
-        {messages.map((msg) => {
-          const isUser = msg.role === 'user';
-          const linkedTxExists =
-            msg.createdTransactionId &&
-            transactions.some((t) => t.id === msg.createdTransactionId);
-
-          return (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
-            >
-              <div
-                className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed ${
-                  isUser
-                    ? 'bg-indigo-500 text-white rounded-br-sm'
-                    : msg.error
-                    ? 'bg-rose-500/12 text-rose-400 border border-rose-500/25 rounded-bl-sm'
-                    : 'bg-[var(--surface-2)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-bl-sm'
-                }`}
-              >
-                <p className="whitespace-pre-wrap">{msg.content}</p>
-                {linkedTxExists && msg.createdTransactionId && (
-                  <button
-                    type="button"
-                    onClick={() => onUndoTransaction(msg.createdTransactionId!)}
-                    className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
-                  >
-                    <Undo2 size={12} />
-                    <span>Desfazer lançamento</span>
-                  </button>
-                )}
-              </div>
-              <span className="text-[10px] text-[var(--text-muted)] mt-1 px-1 tabular-financial">
-                {msg.timestamp}
-              </span>
+        {messages.length === 0 && !isLoading ? (
+          <div className="h-full flex flex-col items-center justify-center text-center px-3 py-8 gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+              <Sparkles size={22} />
             </div>
-          );
-        })}
+            <div className="space-y-1 max-w-xs">
+              <p className="text-sm font-semibold text-[var(--text-primary)]">
+                Como posso ajudar hoje?
+              </p>
+              <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+                Descreva um gasto ou receita em texto, envie a foto de um comprovante ou faça perguntas sobre seus lançamentos reais.
+              </p>
+            </div>
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const isUser = msg.role === 'user';
+            const linkedExpenseExists =
+              msg.created_expense_id &&
+              expenses.some((t) => t.id === msg.created_expense_id);
+
+            return (
+              <div
+                key={msg.id}
+                className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+              >
+                <div
+                  className={`max-w-[90%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed ${
+                    isUser
+                      ? 'bg-indigo-500 text-white rounded-br-sm'
+                      : msg.error
+                      ? 'bg-rose-500/12 text-rose-400 border border-rose-500/25 rounded-bl-sm'
+                      : 'bg-[var(--surface-2)] text-[var(--text-primary)] border border-[var(--border-subtle)] rounded-bl-sm'
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+
+                  {msg.draft && (
+                    <div className="mt-2 pt-2 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-muted)] space-y-1 tabular-financial">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>{msg.draft.title.value}</span>
+                        <span className="font-semibold text-[var(--text-primary)]">
+                          {formatCurrencyInline(msg.draft.amount_cents.value)}
+                        </span>
+                      </div>
+                      <div>
+                        Confiança: título {Math.round(msg.draft.title.confidence * 100)}%
+                        <span className="mx-1" aria-hidden="true">·</span>
+                        valor {Math.round(msg.draft.amount_cents.confidence * 100)}%
+                        <span className="mx-1" aria-hidden="true">·</span>
+                        categoria {Math.round(msg.draft.category_id.confidence * 100)}%
+                      </div>
+                    </div>
+                  )}
+
+                  {linkedExpenseExists && msg.created_expense_id && (
+                    <button
+                      type="button"
+                      onClick={() => onUndoExpense(msg.created_expense_id!)}
+                      className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                    >
+                      <Undo2 size={12} />
+                      <span>Desfazer lançamento</span>
+                    </button>
+                  )}
+
+                  {msg.error && onRetryLast && (
+                    <button
+                      type="button"
+                      onClick={onRetryLast}
+                      className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>Tentar de novo</span>
+                    </button>
+                  )}
+                </div>
+                <span className="text-[10px] text-[var(--text-muted)] mt-1 px-1 tabular-financial">
+                  {msg.timestamp}
+                </span>
+              </div>
+            );
+          })
+        )}
 
         {isLoading && (
           <div className="flex items-start">
@@ -172,9 +230,9 @@ export function AIAssistantPanel({
         <div ref={scrollEndRef} />
       </div>
 
-      {/* Quick Prompts */}
+      {/* Sugestões rápidas */}
       <div className="px-4 py-2 border-t border-[var(--border-subtle)] flex items-center gap-1.5 overflow-x-auto">
-        {QUICK_PROMPTS.map((qp) => (
+        {SUGGESTED_QUESTIONS.map((qp) => (
           <button
             key={qp}
             type="button"
@@ -191,7 +249,6 @@ export function AIAssistantPanel({
         <p className="px-4 py-1 text-[11px] text-amber-500">{voiceNote}</p>
       )}
 
-      {/* Floating Input Bar */}
       <form
         onSubmit={handleSubmit}
         className="p-3 border-t border-[var(--border-subtle)] bg-[var(--surface-lowest)]/50"
@@ -220,7 +277,7 @@ export function AIAssistantPanel({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder='Ex: "Gastei 45 no almoço"'
+            placeholder="Descreva um gasto ou pergunte algo..."
             aria-label="Comando ou pergunta para GastoIA"
             className="flex-1 min-w-0 bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none"
           />

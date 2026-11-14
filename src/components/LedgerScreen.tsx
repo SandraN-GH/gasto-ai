@@ -1,56 +1,62 @@
 import { Download, Plus, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { CATEGORY_MAP, EXPENSE_CATEGORIES } from '../data/initialData';
-import type { CategoryId, Transaction } from '../types/finance';
-import { exportTransactionsToCSV } from '../utils/format';
+import { useMemo } from 'react';
+import type { Category, Expense, ExpenseFilters } from '../types';
+import { exportExpensesToCSV } from '../utils/format';
 import { CurrencyValue } from './CurrencyValue';
+import {
+  EmptyStateCard,
+  ErrorStateCard,
+  LedgerSkeleton,
+} from './ScreenStates';
 import { TransactionRow } from './TransactionRow';
 
 interface LedgerScreenProps {
-  transactions: Transaction[];
+  month: string;
+  expenses: Expense[] | null;
+  categories: Category[];
+  filters: ExpenseFilters;
+  loading: boolean;
+  error: string | null;
+  onFiltersChange: (next: ExpenseFilters) => void;
+  onRetry: () => void;
   onOpenNewModal: () => void;
-  onExplainTransaction: (tx: Transaction) => void;
-  onRecategorize: (id: string, category: CategoryId) => void;
-  onDeleteTransaction: (id: string) => void;
-  onSelectTransaction: (tx: Transaction) => void;
+  onExplainExpense: (expense: Expense) => void;
+  onRecategorize: (id: string, categoryId: string) => void;
+  onDeleteExpense: (id: string) => void;
+  onSelectExpense: (expense: Expense) => void;
 }
 
 export function LedgerScreen({
-  transactions,
+  month,
+  expenses,
+  categories,
+  filters,
+  loading,
+  error,
+  onFiltersChange,
+  onRetry,
   onOpenNewModal,
-  onExplainTransaction,
+  onExplainExpense,
   onRecategorize,
-  onDeleteTransaction,
-  onSelectTransaction,
+  onDeleteExpense,
+  onSelectExpense,
 }: LedgerScreenProps) {
-  const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'expense' | 'income'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<'all' | CategoryId>('all');
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return transactions.filter((t) => {
-      if (typeFilter !== 'all' && t.type !== typeFilter) return false;
-      if (categoryFilter !== 'all' && t.category !== categoryFilter) return false;
-      if (q) {
-        const matchTitle = t.title.toLowerCase().includes(q);
-        const matchMethod = t.paymentMethod.toLowerCase().includes(q);
-        const matchNotes = (t.notes ?? '').toLowerCase().includes(q);
-        if (!matchTitle && !matchMethod && !matchNotes) return false;
-      }
-      return true;
-    });
-  }, [transactions, query, typeFilter, categoryFilter]);
+  const list = expenses ?? [];
 
   const totals = useMemo(() => {
-    const inflow = filtered
+    const inflow = list
       .filter((t) => t.type === 'income')
-      .reduce((acc, t) => acc + t.amount, 0);
-    const outflow = filtered
+      .reduce((acc, t) => acc + t.amount_cents, 0);
+    const outflow = list
       .filter((t) => t.type === 'expense')
-      .reduce((acc, t) => acc + t.amount, 0);
+      .reduce((acc, t) => acc + t.amount_cents, 0);
     return { inflow, outflow, net: inflow - outflow };
-  }, [filtered]);
+  }, [list]);
+
+  const hasActiveFilter =
+    Boolean(filters.search?.trim()) ||
+    (filters.type && filters.type !== 'all') ||
+    (filters.category_id && filters.category_id !== 'all');
 
   return (
     <div className="space-y-6">
@@ -67,8 +73,9 @@ export function LedgerScreen({
         <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
-            onClick={() => exportTransactionsToCSV(filtered)}
-            className="inline-flex items-center gap-2 h-10 px-3.5 rounded-xl border border-[var(--border-strong)] text-xs font-semibold text-[var(--text-primary)] hover:bg-indigo-500/8 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            disabled={list.length === 0}
+            onClick={() => exportExpensesToCSV(list, month)}
+            className="inline-flex items-center gap-2 h-10 px-3.5 rounded-xl border border-[var(--border-strong)] text-xs font-semibold text-[var(--text-primary)] hover:bg-indigo-500/8 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download size={15} />
             <span>Exportar CSV</span>
@@ -84,7 +91,7 @@ export function LedgerScreen({
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
+      {/* Barra de busca e filtros */}
       <section className="tier-1-card rounded-2xl p-4 sm:p-5 space-y-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
           <div className="relative flex-1">
@@ -94,16 +101,18 @@ export function LedgerScreen({
             />
             <input
               type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              value={filters.search ?? ''}
+              onChange={(e) =>
+                onFiltersChange({ ...filters, search: e.target.value })
+              }
               placeholder="Buscar por estabelecimento, Pix, nota..."
               aria-label="Buscar lançamentos"
               className="w-full h-11 pl-10 pr-9 rounded-xl bg-[var(--surface-2)] border border-[var(--border-subtle)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-indigo-500 focus:ring-3 focus:ring-indigo-500/20 transition-all"
             />
-            {query && (
+            {filters.search && (
               <button
                 type="button"
-                onClick={() => setQuery('')}
+                onClick={() => onFiltersChange({ ...filters, search: '' })}
                 aria-label="Limpar busca"
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
               >
@@ -128,10 +137,10 @@ export function LedgerScreen({
                 key={tab.id}
                 type="button"
                 role="tab"
-                aria-selected={typeFilter === tab.id}
-                onClick={() => setTypeFilter(tab.id)}
+                aria-selected={(filters.type ?? 'all') === tab.id}
+                onClick={() => onFiltersChange({ ...filters, type: tab.id })}
                 className={`px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  typeFilter === tab.id
+                  (filters.type ?? 'all') === tab.id
                     ? 'bg-indigo-500 text-white'
                     : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                 }`}
@@ -142,44 +151,49 @@ export function LedgerScreen({
           </div>
         </div>
 
-        {/* Interactive Category Filter Buttons */}
+        {/* Filtros por categoria */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           <button
             type="button"
-            onClick={() => setCategoryFilter('all')}
+            onClick={() =>
+              onFiltersChange({ ...filters, category_id: 'all' })
+            }
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              categoryFilter === 'all'
+              !filters.category_id || filters.category_id === 'all'
                 ? 'bg-[var(--text-primary)] text-[var(--canvas)]'
                 : 'bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
             Todas categorias
           </button>
-          {[...EXPENSE_CATEGORIES, 'income' as const].map((catId) => {
-            const meta = CATEGORY_MAP[catId];
-            const active = categoryFilter === catId;
+          {categories.map((cat) => {
+            const active = filters.category_id === cat.id;
             return (
               <button
-                key={catId}
+                key={cat.id}
                 type="button"
-                onClick={() => setCategoryFilter(catId)}
+                onClick={() =>
+                  onFiltersChange({ ...filters, category_id: cat.id })
+                }
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer border ${
                   active
                     ? 'border-transparent text-white'
                     : 'border-[var(--border-subtle)] bg-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                 }`}
-                style={active ? { backgroundColor: meta.color } : undefined}
+                style={active ? { backgroundColor: cat.color } : undefined}
               >
-                {meta.label}
+                {cat.name}
               </button>
             );
           })}
         </div>
 
-        {/* Filtered Totals Strip */}
+        {/* Totais filtrados */}
         <div className="grid grid-cols-3 gap-3 pt-3 border-t border-[var(--border-subtle)] text-xs">
           <div>
-            <span className="text-[var(--text-muted)] block">Entradas ({filtered.filter((t) => t.type === 'income').length})</span>
+            <span className="text-[var(--text-muted)] block">
+              Entradas ({list.filter((t) => t.type === 'income').length})
+            </span>
             <CurrencyValue
               value={totals.inflow}
               size="sm"
@@ -187,7 +201,9 @@ export function LedgerScreen({
             />
           </div>
           <div>
-            <span className="text-[var(--text-muted)] block">Saídas ({filtered.filter((t) => t.type === 'expense').length})</span>
+            <span className="text-[var(--text-muted)] block">
+              Saídas ({list.filter((t) => t.type === 'expense').length})
+            </span>
             <CurrencyValue
               value={totals.outflow}
               size="sm"
@@ -206,43 +222,56 @@ export function LedgerScreen({
         </div>
       </section>
 
-      {/* Ledger List */}
-      <section className="tier-1-card rounded-2xl p-5 sm:p-6">
-        {filtered.length === 0 ? (
-          <div className="py-12 text-center space-y-3">
-            <p className="text-sm font-medium text-[var(--text-primary)]">
-              Nenhum lançamento encontrado para os filtros aplicados.
-            </p>
-            <p className="text-xs text-[var(--text-muted)]">
-              Tente limpar a busca ou registre uma nova movimentação.
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                setQuery('');
-                setTypeFilter('all');
-                setCategoryFilter('all');
-              }}
-              className="mt-2 px-4 py-2 rounded-xl bg-[var(--surface-2)] text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--surface-high)] transition-colors cursor-pointer"
-            >
-              Limpar filtros
-            </button>
-          </div>
-        ) : (
+      {/* Estados: Carregando, Erro, Vazio ou Lista */}
+      {loading && !expenses ? (
+        <LedgerSkeleton />
+      ) : error ? (
+        <ErrorStateCard message={error} onRetry={onRetry} />
+      ) : list.length === 0 ? (
+        <EmptyStateCard
+          variant="ledger"
+          title={
+            hasActiveFilter
+              ? 'Nenhum lançamento encontrado'
+              : 'Seu extrato está vazio'
+          }
+          description={
+            hasActiveFilter
+              ? 'Nenhum item corresponde aos filtros selecionados. Experimente limpar a busca ou escolher outra categoria.'
+              : 'Registre seu primeiro gasto ou receita manualmente ou pelo Assistente GastoIA.'
+          }
+          actionLabel={
+            hasActiveFilter ? 'Limpar filtros' : 'Novo lançamento'
+          }
+          onAction={
+            hasActiveFilter
+              ? () =>
+                  onFiltersChange({
+                    month: filters.month,
+                    search: '',
+                    type: 'all',
+                    category_id: 'all',
+                  })
+              : onOpenNewModal
+          }
+        />
+      ) : (
+        <section className="tier-1-card rounded-2xl p-5 sm:p-6">
           <div className="divide-y divide-[var(--border-subtle)]">
-            {filtered.map((tx) => (
+            {list.map((expense) => (
               <TransactionRow
-                key={tx.id}
-                transaction={tx}
-                onExplain={onExplainTransaction}
+                key={expense.id}
+                expense={expense}
+                categories={categories}
+                onExplain={onExplainExpense}
                 onRecategorize={onRecategorize}
-                onDelete={onDeleteTransaction}
-                onSelect={onSelectTransaction}
+                onDelete={onDeleteExpense}
+                onSelect={onSelectExpense}
               />
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
     </div>
   );
 }
