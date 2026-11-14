@@ -1,0 +1,6 @@
+{
+  "name": "GastoIA",
+  "description": "Gestão financeira pessoal inteligente com registro de gastos por linguagem natural, leitura de recibos e análise preditiva.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
