@@ -1,5 +1,5 @@
 import {
-  CalendarClock,
+  BarChart3,
   ChevronLeft,
   ChevronRight,
   LayoutDashboard,
@@ -8,33 +8,37 @@ import {
   Moon,
   PieChart,
   Plus,
+  Settings,
   Sparkles,
   Sun,
   User as UserIcon,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AIAssistantPanel } from './components/AIAssistantPanel';
 import { AuthLoadingScreen } from './components/AuthLoadingScreen';
 import { AuthScreen } from './components/AuthScreen';
 import { BudgetsScreen } from './components/BudgetsScreen';
 import { LedgerScreen } from './components/LedgerScreen';
 import { NewTransactionModal } from './components/NewTransactionModal';
+import { OfflineBanner } from './components/OfflineBanner';
 import { OverviewScreen } from './components/OverviewScreen';
+import { PWAInstallButton } from './components/PWAInstallButton';
+import { ReportsScreen } from './components/ReportsScreen';
 import { ResetPasswordScreen } from './components/ResetPasswordScreen';
-import { ScheduledScreen } from './components/ScheduledScreen';
+import { SettingsScreen } from './components/SettingsScreen';
 import { useAuth } from './contexts/AuthContext';
 import { useBudgets } from './hooks/useBudgets';
 import { useCategories } from './hooks/useCategories';
 import { useDashboard } from './hooks/useDashboard';
 import { useExpenses } from './hooks/useExpenses';
-import { useScheduled } from './hooks/useScheduled';
+import { useReports } from './hooks/useReports';
 import { useTheme } from './hooks/useTheme';
-import { api } from './lib/api';
+import { api, ApiError, type CreateExpensePayload } from './lib/api';
 import type {
   ChatMessage,
   Expense,
+  ExpenseDraft,
   ExpenseFilters,
-  PaymentMethod,
   ScreenId,
 } from './types';
 import {
@@ -43,6 +47,7 @@ import {
   getCurrentSaoPauloMonth,
   getCurrentSaoPauloTimeLabel,
 } from './utils/format';
+import { resizeImageForAI } from './utils/imageResize';
 
 function shiftMonth(monthStr: string, delta: number): string {
   const [y, m] = monthStr.split('-').map(Number);
@@ -50,6 +55,17 @@ function shiftMonth(monthStr: string, delta: number): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
+}
+
+function getMonthDateBounds(monthStr: string): { from: string; to: string } {
+  const [y, m] = monthStr.split('-').map(Number);
+  if (!y || !m) return { from: '', to: '' };
+  const lastDay = new Date(y, m, 0).getDate();
+  const mm = String(m).padStart(2, '0');
+  return {
+    from: `${y}-${mm}-01`,
+    to: `${y}-${mm}-${String(lastDay).padStart(2, '0')}`,
+  };
 }
 
 interface WorkspaceProps {
@@ -72,22 +88,44 @@ function AuthenticatedWorkspace({
     getCurrentSaoPauloMonth
   );
 
+  const initialBounds = useMemo(
+    () => getMonthDateBounds(selectedMonth),
+    // Apenas para inicializar os filtros com o mês atual
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
   const [expenseFilters, setExpenseFilters] = useState<ExpenseFilters>({
-    month: selectedMonth,
-    search: '',
-    type: 'all',
-    category_id: 'all',
+    from: initialBounds.from,
+    to: initialBounds.to,
+    q: '',
+    category: 'all',
   });
 
-  useEffect(() => {
-    setExpenseFilters((prev) => ({ ...prev, month: selectedMonth }));
-  }, [selectedMonth]);
+  const [reportPeriod, setReportPeriod] = useState<'week' | 'month' | 'year'>(
+    'month'
+  );
+  const [reportFrom, setReportFrom] = useState('');
+  const [reportTo, setReportTo] = useState('');
+
+  const handleShiftMonth = (delta: number) => {
+    setSelectedMonth((curr) => {
+      const next = shiftMonth(curr, delta);
+      const bounds = getMonthDateBounds(next);
+      setExpenseFilters((prev) => ({
+        ...prev,
+        from: bounds.from,
+        to: bounds.to,
+      }));
+      return next;
+    });
+  };
 
   const dashboardState = useDashboard(selectedMonth);
   const expensesState = useExpenses(expenseFilters);
   const categoriesState = useCategories();
   const budgetsState = useBudgets(selectedMonth);
-  const scheduledState = useScheduled();
+  const reportsState = useReports(reportPeriod, reportFrom, reportTo);
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
@@ -95,6 +133,10 @@ function AuthenticatedWorkspace({
 
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
+  const [modalDraft, setModalDraft] = useState<ExpenseDraft | null>(null);
+  const [modalManualOnly, setModalManualOnly] = useState(false);
+  const [modalCameraMode, setModalCameraMode] = useState(false);
+
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -105,33 +147,69 @@ function AuthenticatedWorkspace({
     }, 3400);
   };
 
-  const refetchFinanceViews = () => {
+  const refetchAllData = () => {
     dashboardState.refetch();
     expensesState.refetch();
     budgetsState.refetch();
-    scheduledState.refetch();
+    reportsState.refetch();
+    categoriesState.refetch();
   };
 
-  const handleCreateExpense = async (payload: {
-    title: string;
-    amount_cents: number;
-    type: 'expense' | 'income';
-    category_id: string;
-    payment_method: PaymentMethod;
-    occurred_at: string;
-    notes?: string;
+  const openNewExpenseModal = (opts?: {
+    draft?: ExpenseDraft | null;
+    manual?: boolean;
+    camera?: boolean;
   }) => {
+    setSelectedExpense(null);
+    setModalDraft(opts?.draft ?? null);
+    setModalManualOnly(Boolean(opts?.manual));
+    setModalCameraMode(Boolean(opts?.camera));
+    setModalOpen(true);
+  };
+
+  // Atalho PWA "Adicionar despesa" (?acao=camera)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('acao') === 'camera') {
+      params.delete('acao');
+      const cleanQuery = params.toString();
+      const nextUrl = cleanQuery
+        ? `${window.location.pathname}?${cleanQuery}`
+        : window.location.pathname;
+      window.history.replaceState({}, '', nextUrl);
+      openNewExpenseModal({ camera: true });
+    }
+  }, []);
+
+  const handleCreateExpense = async (payload: CreateExpensePayload) => {
     try {
       const created = await api.createExpense(payload);
-      refetchFinanceViews();
+      refetchAllData();
+      const label =
+        created.merchant?.trim() || created.category_name || 'Despesa';
       showToast(
-        `${created.type === 'income' ? 'Receita' : 'Gasto'} registrado: ${
-          created.title
-        }`
+        `Despesa salva: ${label} (${formatCurrencyInline(created.amount_cents)})`
       );
     } catch (err) {
       showToast(
-        err instanceof Error ? err.message : 'Erro ao salvar lançamento.'
+        err instanceof Error ? err.message : 'Erro ao salvar despesa.'
+      );
+      throw err;
+    }
+  };
+
+  const handleUpdateExpense = async (
+    id: string,
+    payload: Partial<CreateExpensePayload>
+  ) => {
+    try {
+      const updated = await api.updateExpense(id, payload);
+      setSelectedExpense((curr) => (curr && curr.id === id ? updated : curr));
+      refetchAllData();
+      showToast('Despesa atualizada.');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao atualizar despesa.'
       );
       throw err;
     }
@@ -141,92 +219,104 @@ function AuthenticatedWorkspace({
     try {
       const updated = await api.updateExpense(id, { category_id: categoryId });
       setSelectedExpense((curr) => (curr && curr.id === id ? updated : curr));
-      refetchFinanceViews();
-      showToast('Categoria atualizada.');
+      refetchAllData();
+      showToast('Categoria reclassificada.');
     } catch (err) {
       showToast(
-        err instanceof Error ? err.message : 'Erro ao atualizar categoria.'
+        err instanceof Error ? err.message : 'Erro ao reclassificar categoria.'
       );
     }
   };
 
-  const handleDeleteExpense = async (id: string) => {
+  const handleDeleteExpense = async (id: string): Promise<boolean> => {
     try {
       await api.deleteExpense(id);
-      refetchFinanceViews();
-      showToast('Lançamento removido.');
+      refetchAllData();
+      showToast('Despesa excluída.');
+      return true;
     } catch (err) {
       showToast(
-        err instanceof Error ? err.message : 'Erro ao remover lançamento.'
+        err instanceof Error ? err.message : 'Erro ao excluir despesa.'
       );
+      return false;
     }
   };
 
   const handleUpdateBudgetLimit = async (
     categoryId: string,
-    limitCents: number
+    budgetCents: number
   ) => {
     try {
       await api.upsertBudget({
         category_id: categoryId,
-        month: selectedMonth,
-        limit_cents: limitCents,
+        budget_cents: budgetCents,
       });
       budgetsState.refetch();
       dashboardState.refetch();
+      categoriesState.refetch();
     } catch (err) {
       showToast(
         err instanceof Error ? err.message : 'Erro ao atualizar orçamento.'
       );
+      throw err;
     }
   };
 
-  const handlePayScheduled = async (id: string) => {
-    try {
-      const result = await api.payScheduled(id);
-      refetchFinanceViews();
-      showToast(
-        `Pago: ${result.scheduled.title} (${formatCurrencyInline(
-          result.scheduled.amount_cents
-        )})`
-      );
-    } catch (err) {
-      showToast(
-        err instanceof Error ? err.message : 'Erro ao liquidar pagamento.'
-      );
-    }
-  };
-
-  const handleToggleAutoPay = async (id: string, nextAutoPay: boolean) => {
-    try {
-      await api.toggleScheduledAutoPay(id, nextAutoPay);
-      scheduledState.refetch();
-    } catch (err) {
-      showToast(
-        err instanceof Error ? err.message : 'Erro ao atualizar agendamento.'
-      );
-    }
-  };
-
-  const handleAddScheduled = async (item: {
-    title: string;
-    recipient: string;
-    amount_cents: number;
-    category_id: string;
-    due_date: string;
-    recurrence: 'Mensal' | 'Única' | 'Anual';
-    auto_pay: boolean;
+  const handleCreateCategory = async (payload: {
+    name: string;
+    color: string;
+    icon?: string;
+    budget_cents?: number;
   }) => {
     try {
-      await api.createScheduled(item);
-      scheduledState.refetch();
-      dashboardState.refetch();
-      showToast(`Agendamento salvo: ${item.title}`);
+      await api.createCategory(payload);
+      refetchAllData();
+      showToast(`Categoria criada: ${payload.name}`);
     } catch (err) {
       showToast(
-        err instanceof Error ? err.message : 'Erro ao salvar agendamento.'
+        err instanceof Error ? err.message : 'Erro ao criar categoria.'
       );
       throw err;
+    }
+  };
+
+  const handleUpdateCategory = async (
+    id: string,
+    payload: { name: string; color: string; icon: string }
+  ) => {
+    try {
+      await api.updateCategory(id, payload);
+      refetchAllData();
+      showToast(`Categoria atualizada: ${payload.name}`);
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao atualizar categoria.'
+      );
+      throw err;
+    }
+  };
+
+  const handleDeleteCategory = async (id: string, reassignTo?: string) => {
+    try {
+      await api.deleteCategory(id, reassignTo);
+      refetchAllData();
+      showToast('Categoria removida.');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Erro ao excluir categoria.'
+      );
+      throw err;
+    }
+  };
+
+  const handleExportCsv = async () => {
+    try {
+      await api.downloadExportCsv();
+      showToast('Arquivo CSV baixado.');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Não foi possível exportar o CSV.'
+      );
     }
   };
 
@@ -242,26 +332,19 @@ function AuthenticatedWorkspace({
     setAiLoading(true);
 
     try {
-      const data = await api.askAssistant(text, selectedMonth);
-
-      if (data.created_expense) {
-        refetchFinanceViews();
-        showToast(
-          `Registrado via IA: ${data.created_expense.title} (${formatCurrencyInline(
-            data.created_expense.amount_cents
-          )})`
-        );
-      }
-
+      const res = await api.parseExpenseText(text);
       setChatMessages((prev) => [
         ...prev,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          content: data.reply,
+          content: res.draft.fallback_used
+            ? 'Preparei um rascunho simplificado. Confira os campos antes de salvar.'
+            : `Identifiquei uma despesa (${Math.round(
+                res.draft.overall_confidence * 100
+              )}% de confiança). Revise e confirme para salvar.`,
           timestamp: getCurrentSaoPauloTimeLabel(),
-          created_expense_id: data.created_expense?.id,
-          draft: data.draft,
+          draft: res.draft,
         },
       ]);
     } catch (err) {
@@ -273,9 +356,10 @@ function AuthenticatedWorkspace({
           content:
             err instanceof Error
               ? err.message
-              : 'Não foi possível completar a solicitação.',
+              : 'Não foi possível analisar o texto agora.',
           timestamp: getCurrentSaoPauloTimeLabel(),
           error: true,
+          errorCode: err instanceof ApiError ? err.code : undefined,
         },
       ]);
     } finally {
@@ -287,40 +371,26 @@ function AuthenticatedWorkspace({
     const userMsg: ChatMessage = {
       id: `u-img-${Date.now()}`,
       role: 'user',
-      content: `Comprovante enviado: ${file.name}`,
+      content: `Imagem enviada: ${file.name}`,
       timestamp: getCurrentSaoPauloTimeLabel(),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setAiLoading(true);
 
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error('Falha ao ler arquivo.'));
-        reader.readAsDataURL(file);
-      });
-
-      const data = await api.parseReceipt(base64, file.type || 'image/jpeg');
-
-      if (data.created_expense) {
-        refetchFinanceViews();
-        showToast(
-          `Recibo lançado: ${data.created_expense.title} (${formatCurrencyInline(
-            data.created_expense.amount_cents
-          )})`
-        );
-      }
+      const compressed = await resizeImageForAI(file);
+      const res = await api.parseExpenseImage(compressed);
 
       setChatMessages((prev) => [
         ...prev,
         {
           id: `a-ocr-${Date.now()}`,
           role: 'assistant',
-          content: data.reply,
+          content: `Leitura do comprovante concluída (${Math.round(
+            res.draft.overall_confidence * 100
+          )}% de confiança). Revise e confirme para salvar.`,
           timestamp: getCurrentSaoPauloTimeLabel(),
-          created_expense_id: data.created_expense?.id,
-          draft: data.draft,
+          draft: res.draft,
         },
       ]);
     } catch (err) {
@@ -332,9 +402,10 @@ function AuthenticatedWorkspace({
           content:
             err instanceof Error
               ? err.message
-              : 'Erro ao processar imagem do recibo.',
+              : 'Não foi possível ler a imagem do comprovante.',
           timestamp: getCurrentSaoPauloTimeLabel(),
           error: true,
+          errorCode: err instanceof ApiError ? err.code : undefined,
         },
       ]);
     } finally {
@@ -342,27 +413,7 @@ function AuthenticatedWorkspace({
     }
   };
 
-  const handleExplainExpenseInline = async (
-    expense: Expense
-  ): Promise<string> => {
-    try {
-      const res = await api.explainExpense(expense.id);
-      return res.explanation || 'Sem análise disponível.';
-    } catch (err) {
-      return err instanceof Error
-        ? err.message
-        : 'Não foi possível gerar explicação.';
-    }
-  };
-
-  const handleExplainFromRow = (expense: Expense) => {
-    setSelectedExpense(expense);
-    setModalOpen(true);
-  };
-
   const categories = categoriesState.data ?? [];
-  const expensesList =
-    expensesState.data ?? dashboardState.data?.recent_expenses ?? [];
   const userInitial = (displayName || userEmail || 'U')
     .charAt(0)
     .toUpperCase();
@@ -375,7 +426,8 @@ function AuthenticatedWorkspace({
     { id: 'overview', label: 'Visão Geral', icon: LayoutDashboard },
     { id: 'ledger', label: 'Extrato', icon: ListOrdered },
     { id: 'budgets', label: 'Orçamentos', icon: PieChart },
-    { id: 'scheduled', label: 'Agendados', icon: CalendarClock },
+    { id: 'reports', label: 'Relatórios', icon: BarChart3 },
+    { id: 'settings', label: 'Configurações', icon: Settings },
   ];
 
   const renderMainScreen = () => {
@@ -390,39 +442,37 @@ function AuthenticatedWorkspace({
             error={dashboardState.error}
             onRetry={dashboardState.refetch}
             onNavigate={setScreen}
-            onOpenNewModal={() => {
-              setSelectedExpense(null);
-              setModalOpen(true);
-            }}
-            onExplainExpense={handleExplainFromRow}
+            onOpenNewModal={() => openNewExpenseModal()}
             onRecategorize={handleRecategorize}
             onDeleteExpense={handleDeleteExpense}
             onSelectExpense={(exp) => {
+              setModalDraft(null);
+              setModalManualOnly(false);
               setSelectedExpense(exp);
               setModalOpen(true);
             }}
-            onPayScheduled={handlePayScheduled}
           />
         );
       case 'ledger':
         return (
           <LedgerScreen
-            month={selectedMonth}
             expenses={expensesState.data}
             categories={categories}
             filters={expenseFilters}
             loading={expensesState.loading}
+            loadingMore={expensesState.loadingMore}
+            hasMore={Boolean(expensesState.nextCursor)}
             error={expensesState.error}
             onFiltersChange={setExpenseFilters}
             onRetry={expensesState.refetch}
-            onOpenNewModal={() => {
-              setSelectedExpense(null);
-              setModalOpen(true);
-            }}
-            onExplainExpense={handleExplainFromRow}
+            onLoadMore={expensesState.loadMore}
+            onExportCsv={handleExportCsv}
+            onOpenNewModal={() => openNewExpenseModal()}
             onRecategorize={handleRecategorize}
             onDeleteExpense={handleDeleteExpense}
             onSelectExpense={(exp) => {
+              setModalDraft(null);
+              setModalManualOnly(false);
               setSelectedExpense(exp);
               setModalOpen(true);
             }}
@@ -433,24 +483,48 @@ function AuthenticatedWorkspace({
           <BudgetsScreen
             month={selectedMonth}
             budgets={budgetsState.data}
-            categories={categories}
             loading={budgetsState.loading}
             error={budgetsState.error}
             onRetry={budgetsState.refetch}
             onUpdateLimit={handleUpdateBudgetLimit}
+            onOpenSettings={() => setScreen('settings')}
           />
         );
-      case 'scheduled':
+      case 'reports':
         return (
-          <ScheduledScreen
-            scheduled={scheduledState.data}
-            categories={categories}
-            loading={scheduledState.loading}
-            error={scheduledState.error}
-            onRetry={scheduledState.refetch}
-            onPayScheduled={handlePayScheduled}
-            onToggleAutoPay={handleToggleAutoPay}
-            onAddScheduled={handleAddScheduled}
+          <ReportsScreen
+            period={reportPeriod}
+            from={reportFrom}
+            to={reportTo}
+            reports={reportsState.data}
+            loading={reportsState.loading}
+            error={reportsState.error}
+            onPeriodChange={setReportPeriod}
+            onDateRangeChange={(f, t) => {
+              setReportFrom(f);
+              setReportTo(t);
+            }}
+            onRetry={reportsState.refetch}
+            onExportCsv={handleExportCsv}
+            onOpenNewModal={() => openNewExpenseModal()}
+          />
+        );
+      case 'settings':
+        return (
+          <SettingsScreen
+            displayName={displayName}
+            userEmail={userEmail}
+            darkMode={darkMode}
+            categories={categoriesState.data}
+            loading={categoriesState.loading}
+            error={categoriesState.error}
+            onRetry={categoriesState.refetch}
+            onToggleTheme={onToggleTheme}
+            onSignOut={onSignOut}
+            onExportCsv={handleExportCsv}
+            onCreateCategory={handleCreateCategory}
+            onUpdateCategory={handleUpdateCategory}
+            onDeleteCategory={handleDeleteCategory}
           />
         );
       case 'assistant':
@@ -461,7 +535,7 @@ function AuthenticatedWorkspace({
                 Assistente GastoIA
               </h1>
               <p className="text-sm text-[var(--text-muted)] mt-0.5">
-                Registre gastos em linguagem natural ou envie fotos de recibos
+                Descreva um gasto ou envie uma foto para revisar e salvar
               </p>
             </div>
             <AIAssistantPanel
@@ -469,11 +543,11 @@ function AuthenticatedWorkspace({
               isLoading={aiLoading}
               onSendPrompt={handleSendAIPrompt}
               onUploadReceipt={handleUploadReceipt}
-              onUndoExpense={handleDeleteExpense}
+              onReviewDraft={(draft) => openNewExpenseModal({ draft })}
+              onOpenManualForm={() => openNewExpenseModal({ manual: true })}
               onRetryLast={
                 lastPrompt ? () => handleSendAIPrompt(lastPrompt) : undefined
               }
-              expenses={expensesList}
               className="h-[calc(100vh-220px)] min-h-[460px]"
             />
           </div>
@@ -483,7 +557,7 @@ function AuthenticatedWorkspace({
 
   return (
     <div className="min-h-screen bg-[var(--canvas)] text-[var(--text-primary)] transition-colors">
-      {/* Cabeçalho compacto mobile com usuário e sair */}
+      {/* Cabeçalho compacto mobile com atalhos e perfil */}
       <header className="lg:hidden sticky top-0 z-30 h-[52px] px-5 glass-surface border-x-0 border-t-0 flex items-center justify-between gap-4">
         <a
           href="#overview"
@@ -496,31 +570,57 @@ function AuthenticatedWorkspace({
           GastoIA
         </a>
 
-        <div className="flex items-center gap-1.5 shrink-0 relative">
+        <div className="flex items-center gap-1 shrink-0 relative">
+          <button
+            type="button"
+            onClick={() => setScreen('reports')}
+            aria-label="Relatórios"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
+              screen === 'reports'
+                ? 'bg-indigo-500/15 text-indigo-400'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'
+            }`}
+          >
+            <BarChart3 size={17} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setScreen('settings')}
+            aria-label="Configurações"
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
+              screen === 'settings'
+                ? 'bg-indigo-500/15 text-indigo-400'
+                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-2)]'
+            }`}
+          >
+            <Settings size={17} />
+          </button>
+
           <button
             type="button"
             onClick={onToggleTheme}
             aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo escuro'}
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+            className="w-9 h-9 rounded-xl flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
           >
-            {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
           </button>
 
           <button
             type="button"
             onClick={() => setProfileMenuOpen((v) => !v)}
             aria-label="Perfil do usuário"
-            className="h-9 px-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--border-subtle)] flex items-center gap-2 text-xs font-semibold text-[var(--text-primary)] cursor-pointer"
+            className="h-9 px-2 rounded-xl bg-[var(--surface-2)] border border-[var(--border-subtle)] flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer"
           >
             <span className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-[11px] font-bold">
               {userInitial}
             </span>
-            <span className="max-w-[90px] truncate">{displayName}</span>
+            <span className="max-w-[72px] truncate">{displayName}</span>
           </button>
 
           {profileMenuOpen && (
             <div
-              className="absolute right-0 top-12 w-64 p-3 rounded-2xl glass-surface shadow-xl space-y-3 z-40"
+              className="absolute right-0 top-12 w-64 p-3 rounded-2xl glass-surface shadow-xl space-y-2.5 z-40"
               onMouseLeave={() => setProfileMenuOpen(false)}
             >
               <div className="min-w-0">
@@ -531,6 +631,17 @@ function AuthenticatedWorkspace({
                   {userEmail}
                 </p>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  setScreen('settings');
+                }}
+                className="w-full flex items-center justify-center gap-2 h-9 rounded-xl border border-[var(--border-strong)] text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+              >
+                <Settings size={14} />
+                <span>Configurações</span>
+              </button>
               <button
                 type="button"
                 onClick={onSignOut}
@@ -579,6 +690,22 @@ function AuthenticatedWorkspace({
                   </button>
                 );
               })}
+
+              <button
+                type="button"
+                onClick={() => setScreen('assistant')}
+                className={`xl:hidden w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-sm font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  screen === 'assistant'
+                    ? 'bg-indigo-500/15 text-indigo-500 dark:text-[#c0c1ff] font-semibold'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)]'
+                }`}
+              >
+                <Sparkles
+                  size={18}
+                  strokeWidth={screen === 'assistant' ? 2.2 : 1.8}
+                />
+                <span>Assistente IA</span>
+              </button>
             </nav>
           </div>
 
@@ -597,6 +724,8 @@ function AuthenticatedWorkspace({
                 </p>
               </div>
             </div>
+
+            <PWAInstallButton compact />
 
             <button
               type="button"
@@ -620,12 +749,12 @@ function AuthenticatedWorkspace({
 
         {/* Área principal */}
         <main className="flex-1 min-w-0 px-5 sm:px-6 lg:px-8 py-6 pb-24 lg:pb-8">
-          {/* Topo desktop com seletor de mês e identificação do usuário */}
+          {/* Topo com seletor de mês e identificação do usuário */}
           <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
             <div className="inline-flex items-center gap-1 rounded-xl bg-[var(--surface-1)] border border-[var(--border-subtle)] p-1">
               <button
                 type="button"
-                onClick={() => setSelectedMonth((m) => shiftMonth(m, -1))}
+                onClick={() => handleShiftMonth(-1)}
                 aria-label="Mês anterior"
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
               >
@@ -636,7 +765,7 @@ function AuthenticatedWorkspace({
               </span>
               <button
                 type="button"
-                onClick={() => setSelectedMonth((m) => shiftMonth(m, 1))}
+                onClick={() => handleShiftMonth(1)}
                 aria-label="Próximo mês"
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
               >
@@ -663,17 +792,17 @@ function AuthenticatedWorkspace({
             </div>
 
             {screen !== 'assistant' && (
-              <div className="hidden lg:block xl:col-span-4 lg:sticky lg:top-6">
+              <div className="hidden xl:block xl:col-span-4 xl:sticky xl:top-6">
                 <AIAssistantPanel
                   messages={chatMessages}
                   isLoading={aiLoading}
                   onSendPrompt={handleSendAIPrompt}
                   onUploadReceipt={handleUploadReceipt}
-                  onUndoExpense={handleDeleteExpense}
+                  onReviewDraft={(draft) => openNewExpenseModal({ draft })}
+                  onOpenManualForm={() => openNewExpenseModal({ manual: true })}
                   onRetryLast={
                     lastPrompt ? () => handleSendAIPrompt(lastPrompt) : undefined
                   }
-                  expenses={expensesList}
                   className="h-[calc(100vh-48px)] max-h-[780px]"
                 />
               </div>
@@ -720,11 +849,8 @@ function AuthenticatedWorkspace({
         <div className="flex items-center justify-center">
           <button
             type="button"
-            onClick={() => {
-              setSelectedExpense(null);
-              setModalOpen(true);
-            }}
-            aria-label="Novo lançamento"
+            onClick={() => openNewExpenseModal()}
+            aria-label="Adicionar despesa"
             className="w-11 h-11 rounded-full bg-indigo-500 hover:bg-indigo-600 active:scale-95 text-white flex items-center justify-center shadow-lg shadow-indigo-500/30 transition-transform cursor-pointer"
           >
             <Plus size={20} />
@@ -772,18 +898,25 @@ function AuthenticatedWorkspace({
         </div>
       )}
 
+      <OfflineBanner />
+
       <NewTransactionModal
         open={modalOpen}
         categories={categories}
         selectedExpense={selectedExpense}
+        initialDraft={modalDraft}
+        initialManual={modalManualOnly}
+        initialCamera={modalCameraMode}
         onClose={() => {
           setModalOpen(false);
           setSelectedExpense(null);
+          setModalDraft(null);
+          setModalManualOnly(false);
+          setModalCameraMode(false);
         }}
         onCreate={handleCreateExpense}
-        onUpdateCategory={handleRecategorize}
+        onUpdateExpense={handleUpdateExpense}
         onDelete={handleDeleteExpense}
-        onExplain={handleExplainExpenseInline}
       />
     </div>
   );

@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gastoia",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-01-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "SUPABASE_URL": "https://sybafbtgvuihysasoluh.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_A0Qw9m39KvXCAkUYK2lXzg_y-_g-mm-"
+  },
+  "triggers": {
+    "crons": ["0 12 * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}

@@ -148,9 +148,26 @@ export function AuthScreen({
 
     setSubmitting(true);
     try {
-      await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-        redirectTo: `${window.location.origin}/redefinir-senha`,
-      });
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        normalizedEmail,
+        {
+          redirectTo: `${window.location.origin}/redefinir-senha`,
+        }
+      );
+
+      if (error) {
+        if (error.status === 429) {
+          setErrorMsg(
+            'Muitas solicitações em sequência. Aguarde alguns minutos antes de tentar novamente.'
+          );
+          return;
+        }
+        setErrorMsg(
+          'Não foi possível processar a solicitação agora. Tente novamente.'
+        );
+        return;
+      }
+
       // Sempre exibe resposta neutra sem revelar se o e-mail existe
       setInfoMsg(
         'Se este e-mail estiver cadastrado, enviaremos um link para redefinir sua senha.'

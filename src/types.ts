@@ -5,111 +5,147 @@ export type PaymentMethod =
   | 'Transferência'
   | 'Dinheiro';
 
+export type ExpenseSource = 'image' | 'text' | 'manual';
+
 export type ScreenId =
   | 'overview'
   | 'ledger'
   | 'budgets'
-  | 'scheduled'
-  | 'assistant';
+  | 'reports'
+  | 'assistant'
+  | 'settings';
 
-// Categoria persistida no D1 (por usuário)
+// Categoria persistida no Supabase (por usuário)
 export interface Category {
   id: string;
+  user_id: string;
   name: string;
-  slug: string;
-  color: string;
-  icon: string;
-  type: 'expense' | 'income';
+  icon: string | null;
+  color: string | null;
+  budget_cents: number;
+  is_default: number;
+  created_at: string;
 }
 
-// Lançamento financeiro com valores em centavos (inteiro)
+// Despesa persistida no Supabase (valores em centavos inteiros)
 export interface Expense {
   id: string;
-  title: string;
+  user_id: string;
   amount_cents: number;
-  type: 'expense' | 'income';
+  expense_date: string; // YYYY-MM-DD
+  merchant: string | null;
   category_id: string;
-  category_name?: string;
-  category_slug?: string;
-  category_color?: string;
-  payment_method: PaymentMethod;
-  occurred_at: string; // ISO 8601
-  notes?: string | null;
-  ai_parsed?: boolean;
+  payment_method: string | null;
+  notes: string | null;
+  source: ExpenseSource | null;
+  ai_confidence: number | null;
+  created_at: string;
+  updated_at?: string | null;
+  category_name?: string | null;
+  category_icon?: string | null;
+  category_color?: string | null;
 }
 
-// Valor extraído pela IA com nível de confiança individual (0 a 1)
+// Campo extraído pela IA com nível de confiança individual (0 a 1)
 export interface FieldConfidence<T> {
   value: T;
   confidence: number;
 }
 
-// Rascunho de lançamento gerado pela IA com confiança por campo
+// Rascunho devolvido por POST /api/ai/parse para revisão do usuário
 export interface ExpenseDraft {
-  title: FieldConfidence<string>;
   amount_cents: FieldConfidence<number>;
-  type: FieldConfidence<'expense' | 'income'>;
+  expense_date: FieldConfidence<string>;
+  merchant: FieldConfidence<string>;
   category_id: FieldConfidence<string>;
-  category_name?: string;
-  payment_method: FieldConfidence<PaymentMethod>;
-  occurred_at: FieldConfidence<string>;
-  notes?: string;
+  category_name: string;
+  payment_method: FieldConfidence<string>;
+  notes: string | null;
+  source: 'image' | 'text';
+  overall_confidence: number;
+  fallback_used: boolean;
 }
 
-// Orçamento mensal por categoria (centavos inteiros)
 export interface Budget {
-  id: string;
   category_id: string;
   category_name: string;
-  category_slug: string;
-  category_color: string;
-  month: string; // YYYY-MM
-  limit_cents: number;
+  category_icon: string | null;
+  category_color: string | null;
+  budget_cents: number;
   spent_cents: number;
+  used_pct: number;
 }
 
-export interface CashflowSeriesPoint {
-  label: string;
-  date_key: string;
-  income_cents: number;
-  expense_cents: number;
+export interface DailySeriesPoint {
+  date: string; // YYYY-MM-DD
+  total_cents: number;
 }
 
-export interface ScheduledTransfer {
+export interface MerchantSummary {
+  merchant: string;
+  count: number;
+  total_cents: number;
+}
+
+export interface DashboardInsight {
   id: string;
+  kind: 'budget_alert' | 'category_variation' | 'largest_expense';
+  severity: 'info' | 'warning' | 'alert' | 'positive';
   title: string;
-  recipient: string;
-  amount_cents: number;
-  category_id: string;
-  category_name?: string;
-  category_slug?: string;
-  category_color?: string;
-  due_date: string; // YYYY-MM-DD
-  recurrence: 'Mensal' | 'Única' | 'Anual';
-  auto_pay: boolean;
-  status: 'scheduled' | 'paid' | 'due_soon';
+  description: string;
 }
 
-// Dados agregados da tela Visão Geral
 export interface DashboardData {
   month: string; // YYYY-MM
-  balance_cents: number;
-  monthly_income_cents: number;
-  monthly_expense_cents: number;
-  savings_rate: number;
-  cashflow_7d: CashflowSeriesPoint[];
-  cashflow_30d: CashflowSeriesPoint[];
-  cashflow_6m: CashflowSeriesPoint[];
-  budgets: Budget[];
+  total_cents: number;
+  previous_month_cents: number;
+  variation_pct: number | null;
+  by_category: Budget[];
+  daily_series: DailySeriesPoint[];
   recent_expenses: Expense[];
-  upcoming_scheduled: ScheduledTransfer[];
+  top_merchants: MerchantSummary[];
+  insights: DashboardInsight[];
+}
+
+export interface ReportsData {
+  period: 'week' | 'month' | 'year';
+  from: string;
+  to: string;
+  summary: {
+    total_cents: number;
+    count: number;
+    average_cents: number;
+  };
+  by_category: Array<{
+    category_id: string;
+    category_name: string;
+    category_color: string | null;
+    category_icon: string | null;
+    total_cents: number;
+    count: number;
+  }>;
+  series: Array<{
+    bucket: string;
+    total_cents: number;
+    count: number;
+  }>;
+  top_merchants: MerchantSummary[];
 }
 
 export interface ExpenseFilters {
-  month?: string;
-  search?: string;
-  type?: 'all' | 'expense' | 'income';
-  category_id?: string;
+  from?: string;
+  to?: string;
+  category?: string;
+  min?: number;
+  max?: number;
+  q?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface ExpensesPage {
+  items: Expense[];
+  next_cursor: string | null;
 }
 
 export interface ChatMessage {
@@ -117,14 +153,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  created_expense_id?: string;
   draft?: ExpenseDraft;
   error?: boolean;
-}
-
-export interface BudgetRecommendation {
-  category_id?: string;
-  category_name: string;
-  suggested_limit_cents: number;
-  reason: string;
+  errorCode?: string;
 }

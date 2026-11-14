@@ -1,22 +1,23 @@
 import type {
-  Budget,
-  BudgetRecommendation,
   Category,
   DashboardData,
   Expense,
   ExpenseDraft,
   ExpenseFilters,
-  PaymentMethod,
-  ScheduledTransfer,
+  ExpenseSource,
+  ExpensesPage,
+  ReportsData,
 } from '../types';
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status = 0) {
+  constructor(message: string, status = 0, code?: string) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -26,7 +27,6 @@ type UnauthorizedHandler = () => Promise<void> | void;
 let getAccessTokenFn: TokenGetter = () => null;
 let onUnauthorizedFn: UnauthorizedHandler = () => {};
 
-// Registra os callbacks de autenticação do Supabase quando o login for conectado
 export function configureApiAuth(handlers: {
   getAccessToken: TokenGetter;
   onUnauthorized: UnauthorizedHandler;
@@ -81,17 +81,22 @@ export async function apiFetch<T>(
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new ApiError('A solicitação foi cancelada.', 0);
+      throw new ApiError('A solicitação foi cancelada.', 0, 'ABORTED');
     }
     throw new ApiError(
       'Sem conexão com o servidor. Verifique sua internet e tente novamente.',
-      0
+      0,
+      'NETWORK_ERROR'
     );
   }
 
   if (response.status === 401) {
     await onUnauthorizedFn();
-    throw new ApiError('Sua sessão expirou. Faça login novamente.', 401);
+    throw new ApiError(
+      'Sua sessão expirou. Faça login novamente.',
+      401,
+      'UNAUTHORIZED'
+    );
   }
 
   const contentType = response.headers.get('content-type') ?? '';
@@ -105,16 +110,24 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
-    const serverMessage =
-      parsedBody &&
-      typeof parsedBody === 'object' &&
-      'error' in parsedBody &&
-      typeof (parsedBody as { error?: unknown }).error === 'string'
-        ? (parsedBody as { error: string }).error
-        : undefined;
+    let serverMessage: string | undefined;
+    let serverCode: string | undefined;
+
+    if (parsedBody && typeof parsedBody === 'object' && 'error' in parsedBody) {
+      const errVal = (parsedBody as { error?: unknown }).error;
+      if (typeof errVal === 'string') {
+        serverMessage = errVal;
+      } else if (errVal && typeof errVal === 'object') {
+        const obj = errVal as { code?: unknown; message?: unknown };
+        if (typeof obj.message === 'string') serverMessage = obj.message;
+        if (typeof obj.code === 'string') serverCode = obj.code;
+      }
+    }
+
     throw new ApiError(
       mapStatusToPortuguese(response.status, serverMessage),
-      response.status
+      response.status,
+      serverCode
     );
   }
 
@@ -126,31 +139,29 @@ export async function apiFetch<T>(
 }
 
 export interface CreateExpensePayload {
-  title: string;
   amount_cents: number;
-  type: 'expense' | 'income';
+  expense_date: string;
+  merchant?: string | null;
   category_id: string;
-  payment_method: PaymentMethod;
-  occurred_at: string;
-  notes?: string;
-  ai_parsed?: boolean;
+  payment_method?: string | null;
+  notes?: string | null;
+  source?: ExpenseSource;
+  ai_confidence?: number | null;
 }
 
-export interface AIAssistantResponse {
-  intent: 'create_transaction' | 'answer_question';
-  reply: string;
-  draft?: ExpenseDraft;
-  created_expense?: Expense;
-}
-
-export interface AIReceiptResponse {
-  readable: boolean;
-  reply: string;
-  draft?: ExpenseDraft;
-  created_expense?: Expense;
+export interface AIParseResponse {
+  draft: ExpenseDraft;
+  remaining_daily_quota: number;
 }
 
 export const api = {
+  bootstrap() {
+    return apiFetch<{ created: boolean; categories: Category[] }>(
+      '/api/bootstrap',
+      { method: 'POST' }
+    );
+  },
+
   getDashboard(month: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ month });
     return apiFetch<DashboardData>(`/api/dashboard?${params.toString()}`, {
@@ -160,14 +171,21 @@ export const api = {
 
   getExpenses(filters: ExpenseFilters = {}, signal?: AbortSignal) {
     const params = new URLSearchParams();
-    if (filters.month) params.set('month', filters.month);
-    if (filters.search) params.set('search', filters.search);
-    if (filters.type && filters.type !== 'all') params.set('type', filters.type);
-    if (filters.category_id && filters.category_id !== 'all') {
-      params.set('category_id', filters.category_id);
+    if (filters.from) params.set('from', filters.from);
+    if (filters.to) params.set('to', filters.to);
+    if (filters.category && filters.category !== 'all') {
+      params.set('category', filters.category);
     }
+    if (filters.min !== undefined) params.set('min', String(filters.min));
+    if (filters.max !== undefined) params.set('max', String(filters.max));
+    if (filters.q) params.set('q', filters.q);
+    if (filters.limit) params.set('limit', String(filters.limit));
+    if (filters.cursor) params.set('cursor', filters.cursor);
+
     const qs = params.toString();
-    return apiFetch<Expense[]>(`/api/expenses${qs ? `?${qs}` : ''}`, { signal });
+    return apiFetch<ExpensesPage>(`/api/expenses${qs ? `?${qs}` : ''}`, {
+      signal,
+    });
   },
 
   createExpense(payload: CreateExpensePayload) {
@@ -185,95 +203,141 @@ export const api = {
   },
 
   deleteExpense(id: string) {
-    return apiFetch<void>(`/api/expenses/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
-    });
+    return apiFetch<{ deleted: boolean }>(
+      `/api/expenses/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
   },
 
   getCategories(signal?: AbortSignal) {
     return apiFetch<Category[]>('/api/categories', { signal });
   },
 
-  getBudgets(month: string, signal?: AbortSignal) {
-    const params = new URLSearchParams({ month });
-    return apiFetch<Budget[]>(`/api/budgets?${params.toString()}`, { signal });
+  createCategory(payload: {
+    name: string;
+    icon?: string;
+    color?: string;
+    budget_cents?: number;
+  }) {
+    return apiFetch<Category>('/api/categories', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
-  upsertBudget(payload: {
-    category_id: string;
-    month: string;
-    limit_cents: number;
-  }) {
-    return apiFetch<Budget>('/api/budgets', {
+  updateCategory(
+    id: string,
+    payload: {
+      name?: string;
+      icon?: string;
+      color?: string;
+      budget_cents?: number;
+    }
+  ) {
+    return apiFetch<Category>(`/api/categories/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deleteCategory(id: string, reassignTo?: string) {
+    const qs = reassignTo
+      ? `?reassign_to=${encodeURIComponent(reassignTo)}`
+      : '';
+    return apiFetch<{ deleted: boolean; reassigned_expenses: number }>(
+      `/api/categories/${encodeURIComponent(id)}${qs}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  upsertBudget(payload: { category_id: string; budget_cents: number }) {
+    return apiFetch<Category>('/api/budgets', {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
   },
 
-  getScheduled(signal?: AbortSignal) {
-    return apiFetch<ScheduledTransfer[]>('/api/scheduled', { signal });
-  },
-
-  createScheduled(payload: {
-    title: string;
-    recipient: string;
-    amount_cents: number;
-    category_id: string;
-    due_date: string;
-    recurrence: 'Mensal' | 'Única' | 'Anual';
-    auto_pay: boolean;
-  }) {
-    return apiFetch<ScheduledTransfer>('/api/scheduled', {
-      method: 'POST',
-      body: JSON.stringify(payload),
+  getReports(
+    period: 'week' | 'month' | 'year',
+    from?: string,
+    to?: string,
+    signal?: AbortSignal
+  ) {
+    const params = new URLSearchParams({ period });
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return apiFetch<ReportsData>(`/api/reports?${params.toString()}`, {
+      signal,
     });
   },
 
-  payScheduled(id: string) {
-    return apiFetch<{ scheduled: ScheduledTransfer; expense: Expense }>(
-      `/api/scheduled/${encodeURIComponent(id)}/pay`,
-      { method: 'POST' }
-    );
+  parseExpenseText(text: string, signal?: AbortSignal) {
+    return apiFetch<AIParseResponse>('/api/ai/parse', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+      signal,
+    });
   },
 
-  toggleScheduledAutoPay(id: string, auto_pay: boolean) {
-    return apiFetch<ScheduledTransfer>(
-      `/api/scheduled/${encodeURIComponent(id)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ auto_pay }),
+  parseExpenseImage(file: File, signal?: AbortSignal) {
+    const formData = new FormData();
+    formData.append('image', file);
+    return apiFetch<AIParseResponse>('/api/ai/parse', {
+      method: 'POST',
+      body: formData,
+      signal,
+    });
+  },
+
+  async downloadExportCsv() {
+    const token = await getAccessTokenFn();
+    const headers = new Headers();
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+
+    let res: Response;
+    try {
+      res = await fetch('/api/export.csv', { headers });
+    } catch {
+      throw new ApiError(
+        'Sem conexão com o servidor. Verifique sua internet e tente novamente.',
+        0,
+        'NETWORK_ERROR'
+      );
+    }
+
+    if (res.status === 401) {
+      await onUnauthorizedFn();
+      throw new ApiError(
+        'Sua sessão expirou. Faça login novamente.',
+        401,
+        'UNAUTHORIZED'
+      );
+    }
+
+    if (!res.ok) {
+      let msg = 'Não foi possível exportar o CSV agora.';
+      try {
+        const body = (await res.json()) as {
+          error?: { message?: string } | string;
+        };
+        if (typeof body?.error === 'string') msg = body.error;
+        else if (body?.error && typeof body.error.message === 'string') {
+          msg = body.error.message;
+        }
+      } catch {
+        msg = mapStatusToPortuguese(res.status);
       }
-    );
-  },
+      throw new ApiError(msg, res.status);
+    }
 
-  askAssistant(prompt: string, month: string) {
-    return apiFetch<AIAssistantResponse>('/api/ai/assistant', {
-      method: 'POST',
-      body: JSON.stringify({ prompt, month }),
-    });
-  },
-
-  parseReceipt(imageBase64: string, mimeType: string) {
-    return apiFetch<AIReceiptResponse>('/api/ai/receipt', {
-      method: 'POST',
-      body: JSON.stringify({ imageBase64, mimeType }),
-    });
-  },
-
-  explainExpense(expenseId: string) {
-    return apiFetch<{ explanation: string }>('/api/ai/analyze', {
-      method: 'POST',
-      body: JSON.stringify({ mode: 'explain_transaction', expense_id: expenseId }),
-    });
-  },
-
-  optimizeBudgets(month: string) {
-    return apiFetch<{
-      summary: string;
-      recommendations: BudgetRecommendation[];
-    }>('/api/ai/analyze', {
-      method: 'POST',
-      body: JSON.stringify({ mode: 'optimize_budgets', month }),
-    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', 'gastoia-despesas.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 };

@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../lib/api';
-import type { ScheduledTransfer } from '../types';
+import type { ReportsData } from '../types';
 
-export function useScheduled() {
-  const [data, setData] = useState<ScheduledTransfer[] | null>(null);
+export function useReports(
+  period: 'week' | 'month' | 'year',
+  from?: string,
+  to?: string
+) {
+  const [data, setData] = useState<ReportsData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -20,18 +24,22 @@ export function useScheduled() {
       setLoading(true);
       setError(null);
       try {
-        const result = await api.getScheduled(controller.signal);
+        const result = await api.getReports(
+          period,
+          from || undefined,
+          to || undefined,
+          controller.signal
+        );
         if (active) {
           setData(result);
         }
       } catch (err) {
         if (!active) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        if (err instanceof ApiError && err.message === 'A solicitação foi cancelada.') return;
+        if (err instanceof ApiError && err.code === 'ABORTED') return;
         setError(
           err instanceof Error
             ? err.message
-            : 'Não foi possível carregar os agendamentos.'
+            : 'Não foi possível carregar os relatórios.'
         );
       } finally {
         if (active) {
@@ -45,7 +53,7 @@ export function useScheduled() {
       active = false;
       controller.abort();
     };
-  }, [reloadKey]);
+  }, [period, from, to, reloadKey]);
 
   return { data, loading, error, refetch };
 }

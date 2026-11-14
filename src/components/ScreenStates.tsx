@@ -44,7 +44,7 @@ export function EmptyStateCard({
   onAction,
   secondaryAction,
 }: {
-  variant: 'overview' | 'ledger' | 'budgets' | 'scheduled';
+  variant: 'overview' | 'ledger' | 'budgets' | 'reports';
   title: string;
   description: string;
   actionLabel?: string;
@@ -132,7 +132,7 @@ export function EmptyStateCard({
             />
           </svg>
         )}
-        {variant === 'scheduled' && (
+        {variant === 'reports' && (
           <svg
             width="44"
             height="44"
@@ -141,22 +141,34 @@ export function EmptyStateCard({
             aria-hidden="true"
           >
             <rect
-              x="7"
-              y="10"
-              width="30"
-              height="26"
-              rx="4"
+              x="8"
+              y="22"
+              width="6"
+              height="14"
+              rx="2"
               stroke="currentColor"
               strokeWidth="1.8"
               opacity="0.7"
             />
-            <path
-              d="M15 7V13M29 7V13M7 18H37"
+            <rect
+              x="19"
+              y="14"
+              width="6"
+              height="22"
+              rx="2"
               stroke="currentColor"
               strokeWidth="1.8"
-              strokeLinecap="round"
+              opacity="0.85"
             />
-            <circle cx="22" cy="27" r="3" fill="#4edea3" />
+            <rect
+              x="30"
+              y="9"
+              width="6"
+              height="27"
+              rx="2"
+              fill="#4edea3"
+              opacity="0.85"
+            />
           </svg>
         )}
       </div>
@@ -321,26 +333,25 @@ export function BudgetsSkeleton() {
   );
 }
 
-export function ScheduledSkeleton() {
+export function ReportsSkeleton() {
   return (
-    <div className="space-y-6" aria-busy="true" aria-label="Carregando agendamentos">
-      <div className="tier-1-card rounded-2xl p-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
+    <div className="space-y-6" aria-busy="true" aria-label="Carregando relatórios">
+      <div className="tier-1-card rounded-2xl p-6 grid grid-cols-1 sm:grid-cols-3 gap-5">
+        <PulseBox className="h-14 w-full" />
         <PulseBox className="h-14 w-full" />
         <PulseBox className="h-14 w-full" />
       </div>
-      <div className="tier-1-card rounded-2xl p-6 space-y-4">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="flex items-center justify-between gap-4 py-2">
-            <div className="flex items-center gap-3">
-              <PulseBox className="w-10 h-10 rounded-full" />
-              <div className="space-y-2">
-                <PulseBox className="h-4 w-40" />
-                <PulseBox className="h-3 w-36" />
-              </div>
-            </div>
-            <PulseBox className="h-9 w-24 rounded-xl" />
-          </div>
-        ))}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="tier-1-card rounded-2xl p-6 space-y-4">
+          <PulseBox className="h-4 w-40" />
+          <PulseBox className="h-36 w-full" />
+        </div>
+        <div className="tier-1-card rounded-2xl p-6 space-y-4">
+          <PulseBox className="h-4 w-44" />
+          <PulseBox className="h-10 w-full" />
+          <PulseBox className="h-10 w-full" />
+          <PulseBox className="h-10 w-full" />
+        </div>
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { api, ApiError } from '../lib/api';
 import type { Budget } from '../types';
 import { getCurrentSaoPauloMonth } from '../utils/format';
 
+// Carrega orçamentos por categoria com base no resumo mensal do dashboard
 export function useBudgets(month: string = getCurrentSaoPauloMonth()) {
   const [data, setData] = useState<Budget[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -21,14 +22,13 @@ export function useBudgets(month: string = getCurrentSaoPauloMonth()) {
       setLoading(true);
       setError(null);
       try {
-        const result = await api.getBudgets(month, controller.signal);
+        const dash = await api.getDashboard(month, controller.signal);
         if (active) {
-          setData(result);
+          setData(dash.by_category);
         }
       } catch (err) {
         if (!active) return;
-        if (err instanceof DOMException && err.name === 'AbortError') return;
-        if (err instanceof ApiError && err.message === 'A solicitação foi cancelada.') return;
+        if (err instanceof ApiError && err.code === 'ABORTED') return;
         setError(
           err instanceof Error
             ? err.message

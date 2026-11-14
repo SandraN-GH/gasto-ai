@@ -5,10 +5,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
-import { configureApiAuth } from '../lib/api';
+import { api, configureApiAuth } from '../lib/api';
 import { initSupabaseClient } from '../lib/supabase';
 
 export type AuthStatus =
@@ -53,6 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // segue com limpeza local mesmo se rede falhar
       }
     }
+    bootstrapInFlightRef.current = null;
+    setBootstrappedUserId(null);
     setSession(null);
     setCacheEpoch((e) => e + 1);
     setStatus('unauthenticated');
@@ -189,6 +192,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [initAttempt]);
 
+  const [bootstrappedUserId, setBootstrappedUserId] = useState<string | null>(
+    null
+  );
+  const bootstrapInFlightRef = useRef<string | null>(null);
+
+  // Garante categorias padrão no Supabase imediatamente após o login (idempotente)
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (status !== 'authenticated' || !userId) {
+      if (status === 'unauthenticated') {
+        setBootstrappedUserId(null);
+      }
+      return;
+    }
+
+    if (
+      bootstrappedUserId === userId ||
+      bootstrapInFlightRef.current === userId
+    ) {
+      return;
+    }
+
+    let active = true;
+    bootstrapInFlightRef.current = userId;
+    api
+      .bootstrap()
+      .catch(() => {
+        // Se falhar momentaneamente, permite o carregamento normal do workspace
+      })
+      .finally(() => {
+        if (bootstrapInFlightRef.current === userId) {
+          bootstrapInFlightRef.current = null;
+        }
+        if (active) {
+          setBootstrappedUserId(userId);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [status, session, bootstrappedUserId]);
+
+  const effectiveStatus: AuthStatus =
+    status === 'authenticated' &&
+    session?.user?.id &&
+    bootstrappedUserId !== session.user.id
+      ? 'loading'
+      : status;
+
   const user = session?.user ?? null;
   const displayName = useMemo(() => {
     if (!user) return '';
@@ -203,7 +256,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(
     () => ({
-      status,
+      status: effectiveStatus,
       configError,
       supabase,
       session,
@@ -215,7 +268,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearRecoveryMode,
     }),
     [
-      status,
+      effectiveStatus,
       configError,
       supabase,
       session,

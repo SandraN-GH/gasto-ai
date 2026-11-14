@@ -1,5 +1,3 @@
-import type { Expense } from '../types';
-
 const SAO_PAULO_TZ = 'America/Sao_Paulo';
 
 // Retorna a data atual (YYYY-MM-DD) no fuso America/Sao_Paulo
@@ -96,14 +94,15 @@ export function formatCurrencyInline(cents: number): string {
   return `${cents < 0 ? '-' : ''}R$ ${formatted}`;
 }
 
-// Formata data/hora com "Hoje"/"Ontem" no fuso America/Sao_Paulo e fallback dd/mm/aaaa
+// Formata data (YYYY-MM-DD) ou ISO datetime com "Hoje"/"Ontem" no fuso America/Sao_Paulo e fallback dd/mm/aaaa
 export function formatRelativeDate(isoDate: string): string {
-  const parsed = new Date(isoDate);
-  const isValidDate = !Number.isNaN(parsed.getTime());
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(isoDate.trim());
+  const parsed = isDateOnly ? null : new Date(isoDate);
+  const isValidDate = parsed !== null && !Number.isNaN(parsed.getTime());
 
   const datePart = isValidDate
     ? getSaoPauloDateString(parsed)
-    : isoDate.slice(0, 10);
+    : isoDate.trim().slice(0, 10);
 
   const timePart = isValidDate
     ? new Intl.DateTimeFormat('pt-BR', {
@@ -139,44 +138,4 @@ export function formatDueDateBR(dateStr: string): string {
   const [year, month, day] = clean.split('-');
   if (!year || !month || !day) return dateStr;
   return `${day}/${month}/${year}`;
-}
-
-export function exportExpensesToCSV(
-  expenses: Expense[],
-  monthLabel: string
-): void {
-  const headers = [
-    'Data',
-    'Descrição',
-    'Tipo',
-    'Categoria',
-    'Pagamento',
-    'Valor (R$)',
-    'Notas',
-  ];
-  const rows = expenses.map((e) => {
-    const signedReais =
-      (e.type === 'income' ? e.amount_cents : -e.amount_cents) / 100;
-    return [
-      formatRelativeDate(e.occurred_at),
-      `"${e.title.replace(/"/g, '""')}"`,
-      e.type === 'income' ? 'Receita' : 'Despesa',
-      `"${(e.category_name ?? 'Outros').replace(/"/g, '""')}"`,
-      e.payment_method,
-      signedReais.toFixed(2).replace('.', ','),
-      `"${(e.notes ?? '').replace(/"/g, '""')}"`,
-    ];
-  });
-
-  const csvContent =
-    '\uFEFF' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', `gastoia-extrato-${monthLabel}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
 }

@@ -1,22 +1,18 @@
 import {
-  ArrowDownLeft,
+  AlertTriangle,
+  ArrowDownRight,
   ArrowUpRight,
   ChevronRight,
+  Info,
+  Lightbulb,
   Plus,
+  Store,
+  TrendingDown,
 } from 'lucide-react';
-import type {
-  Category,
-  DashboardData,
-  Expense,
-  ScreenId,
-} from '../types';
-import {
-  formatCurrencyInline,
-  formatDueDateBR,
-  formatMonthLabel,
-} from '../utils/format';
+import type { Category, DashboardData, Expense, ScreenId } from '../types';
+import { formatCurrencyInline, formatMonthLabel } from '../utils/format';
 import { CashflowChart } from './CashflowChart';
-import { CategoryIcon } from './CategoryIcon';
+import { CategoryDonut } from './CategoryDonut';
 import { CurrencyValue } from './CurrencyValue';
 import {
   EmptyStateCard,
@@ -34,11 +30,9 @@ interface OverviewScreenProps {
   onRetry: () => void;
   onNavigate: (screen: ScreenId) => void;
   onOpenNewModal: () => void;
-  onExplainExpense: (expense: Expense) => void;
   onRecategorize: (id: string, categoryId: string) => void;
   onDeleteExpense: (id: string) => void;
   onSelectExpense: (expense: Expense) => void;
-  onPayScheduled: (id: string) => void;
 }
 
 export function OverviewScreen({
@@ -50,11 +44,9 @@ export function OverviewScreen({
   onRetry,
   onNavigate,
   onOpenNewModal,
-  onExplainExpense,
   onRecategorize,
   onDeleteExpense,
   onSelectExpense,
-  onPayScheduled,
 }: OverviewScreenProps) {
   if (loading && !dashboard) {
     return <OverviewSkeleton />;
@@ -66,31 +58,33 @@ export function OverviewScreen({
 
   const isEmpty =
     !dashboard ||
-    (dashboard.monthly_income_cents === 0 &&
-      dashboard.monthly_expense_cents === 0 &&
-      dashboard.recent_expenses.length === 0 &&
-      dashboard.budgets.length === 0 &&
-      dashboard.upcoming_scheduled.length === 0);
+    (dashboard.total_cents === 0 &&
+      dashboard.previous_month_cents === 0 &&
+      dashboard.recent_expenses.length === 0);
 
   if (isEmpty) {
     return (
       <div className="space-y-6">
         <EmptyStateCard
           variant="overview"
-          title="Sua visão geral está pronta para começar"
-          description={`Nenhum lançamento registrado para ${formatMonthLabel(
+          title="Nenhuma despesa registrada neste mês"
+          description={`Você ainda não lançou despesas em ${formatMonthLabel(
             month
-          )}. Adicione sua primeira receita ou despesa ou use o Assistente GastoIA ao lado.`}
-          actionLabel="Registrar primeiro lançamento"
+          )}. Envie uma foto de nota fiscal, digite um gasto natural ou preencha manualmente.`}
+          actionLabel="Adicionar primeira despesa"
           onAction={onOpenNewModal}
         />
       </div>
     );
   }
 
+  const variation = dashboard.variation_pct ?? 0;
+  const variationUp = variation > 0;
+  const insights = dashboard.insights ?? [];
+
   return (
     <div className="space-y-6">
-      {/* Cartão principal de saldo */}
+      {/* Cartão principal de gastos do mês */}
       <section
         aria-label="Resumo financeiro"
         className="tier-1-card rounded-2xl p-5 sm:p-7 relative overflow-hidden"
@@ -107,30 +101,44 @@ export function OverviewScreen({
         <div className="relative flex flex-col sm:flex-row sm:items-end justify-between gap-6">
           <div>
             <p className="text-xs font-medium text-[var(--text-muted)] tracking-wide">
-              Saldo consolidado · {formatMonthLabel(dashboard.month)}
+              Total gasto · {formatMonthLabel(dashboard.month)}
             </p>
             <div className="mt-2">
               <CurrencyValue
-                value={dashboard.balance_cents}
+                value={dashboard.total_cents}
                 size="display"
                 className="text-[var(--text-primary)]"
               />
             </div>
-            <p className="mt-2.5 text-xs sm:text-sm text-[var(--text-muted)] tabular-financial">
-              Taxa de economia mensal de{' '}
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs sm:text-sm text-[var(--text-muted)] tabular-financial">
+              <span>
+                Mês anterior:{' '}
+                <strong className="text-[var(--text-secondary)]">
+                  {formatCurrencyInline(dashboard.previous_month_cents)}
+                </strong>
+              </span>
+              <span aria-hidden="true">·</span>
               <span
-                className={`font-semibold ${
-                  dashboard.savings_rate >= 20
-                    ? 'text-emerald-500 dark:text-[#4edea3]'
-                    : dashboard.savings_rate > 0
-                    ? 'text-amber-500'
-                    : 'text-rose-500'
+                className={`inline-flex items-center gap-1 font-semibold ${
+                  variation === 0
+                    ? 'text-[var(--text-muted)]'
+                    : variationUp
+                    ? 'text-rose-500 dark:text-[#ffb4ab]'
+                    : 'text-emerald-500 dark:text-[#4edea3]'
                 }`}
               >
-                {dashboard.savings_rate}%
-              </span>{' '}
-              sobre receitas líquidas
-            </p>
+                {variation !== 0 &&
+                  (variationUp ? (
+                    <ArrowUpRight size={15} />
+                  ) : (
+                    <ArrowDownRight size={15} />
+                  ))}
+                <span>
+                  {variation > 0 ? `+${variation}%` : `${variation}%`} vs. mês
+                  anterior
+                </span>
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
@@ -140,64 +148,90 @@ export function OverviewScreen({
               className="inline-flex items-center justify-center gap-2 h-11 sm:h-10 px-4 rounded-xl bg-indigo-500 hover:bg-indigo-600 active:scale-[0.98] text-white text-sm font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-sm shadow-indigo-500/25 border-t border-white/20"
             >
               <Plus size={16} />
-              <span>Novo lançamento</span>
+              <span>Adicionar despesa</span>
             </button>
-          </div>
-        </div>
-
-        <div className="relative grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6 pt-6 border-t border-[var(--border-subtle)]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500/12 text-emerald-500 dark:text-[#4edea3] flex items-center justify-center shrink-0">
-                <ArrowDownLeft size={18} />
-              </div>
-              <div>
-                <p className="text-xs text-[var(--text-muted)]">Receitas do mês</p>
-                <CurrencyValue
-                  value={dashboard.monthly_income_cents}
-                  size="lg"
-                  className="text-emerald-500 dark:text-[#4edea3] mt-0.5"
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3 sm:border-l sm:border-[var(--border-subtle)] sm:pl-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-rose-500/12 text-rose-500 dark:text-[#ffb4ab] flex items-center justify-center shrink-0">
-                <ArrowUpRight size={18} />
-              </div>
-              <div>
-                <p className="text-xs text-[var(--text-muted)]">Despesas do mês</p>
-                <CurrencyValue
-                  value={dashboard.monthly_expense_cents}
-                  size="lg"
-                  className="text-[var(--text-primary)] mt-0.5"
-                />
-              </div>
-            </div>
           </div>
         </div>
       </section>
 
-      {/* Gráfico de fluxo de caixa */}
-      <CashflowChart
-        series7d={dashboard.cashflow_7d}
-        series30d={dashboard.cashflow_30d}
-        series6m={dashboard.cashflow_6m}
-      />
+      {/* Insights gerados por regras determinísticas (oculto se não houver dados suficientes) */}
+      {insights.length > 0 && (
+        <section
+          aria-label="Insights do mês"
+          className="tier-1-card rounded-2xl p-5 sm:p-6 space-y-3"
+        >
+          <div className="flex items-center gap-2">
+            <Lightbulb size={17} className="text-indigo-400" />
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">
+              Insights do mês
+            </h2>
+          </div>
 
-      {/* Grade de limites e agendamentos */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {insights.map((item) => {
+              const iconEl =
+                item.severity === 'alert' || item.severity === 'warning' ? (
+                  <AlertTriangle
+                    size={16}
+                    className={
+                      item.severity === 'alert'
+                        ? 'text-rose-500 shrink-0 mt-0.5'
+                        : 'text-amber-500 shrink-0 mt-0.5'
+                    }
+                  />
+                ) : item.severity === 'positive' ? (
+                  <TrendingDown
+                    size={16}
+                    className="text-emerald-500 shrink-0 mt-0.5"
+                  />
+                ) : (
+                  <Info
+                    size={16}
+                    className="text-indigo-400 shrink-0 mt-0.5"
+                  />
+                );
+
+              return (
+                <div
+                  key={item.id}
+                  className="p-3.5 rounded-xl bg-[var(--surface-2)] border border-[var(--border-subtle)] flex items-start gap-3"
+                >
+                  {iconEl}
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-[var(--text-primary)]">
+                      {item.title}
+                    </p>
+                    <p className="text-xs text-[var(--text-muted)] mt-0.5 leading-relaxed">
+                      {item.description}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Gráficos reais: tendência diária + donut por categoria */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+        <CashflowChart dailySeries={dashboard.daily_series} />
+        <CategoryDonut
+          categories={dashboard.by_category}
+          totalCents={dashboard.total_cents}
+        />
+      </div>
+
+      {/* Categorias & Principais estabelecimentos */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
         <section className="tier-1-card rounded-2xl p-5 sm:p-6 flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between gap-2 mb-5">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text-primary)]">
-                  Limites por Categoria
+                  Gastos por Categoria
                 </h2>
                 <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                  Acompanhamento mensal em tempo real
+                  Orçamento e consumo mensal
                 </p>
               </div>
               <button
@@ -205,48 +239,37 @@ export function OverviewScreen({
                 onClick={() => onNavigate('budgets')}
                 className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-500 dark:text-[#c0c1ff] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <span>Gerenciar</span>
+                <span>Orçamentos</span>
                 <ChevronRight size={14} />
               </button>
             </div>
 
-            {dashboard.budgets.length === 0 ? (
-              <div className="py-6 text-center space-y-2">
-                <p className="text-sm text-[var(--text-muted)]">
-                  Nenhum orçamento configurado para este mês.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('budgets')}
-                  className="text-xs font-semibold text-indigo-400 hover:underline cursor-pointer"
-                >
-                  Definir limites mensais
-                </button>
-              </div>
+            {dashboard.by_category.length === 0 ? (
+              <p className="text-sm text-[var(--text-muted)] py-6 text-center">
+                Nenhuma categoria encontrada.
+              </p>
             ) : (
               <div className="space-y-4">
-                {dashboard.budgets.map((item) => {
+                {dashboard.by_category.map((item) => {
                   const pct =
-                    item.limit_cents > 0
-                      ? Math.min(
-                          Math.round((item.spent_cents / item.limit_cents) * 100),
-                          100
-                        )
+                    item.budget_cents > 0
+                      ? Math.min(Math.round(item.used_pct), 100)
+                      : item.spent_cents > 0
+                      ? 100
                       : 0;
-                  const rawPct =
-                    item.limit_cents > 0
-                      ? Math.round((item.spent_cents / item.limit_cents) * 100)
-                      : 0;
-                  const isOver = rawPct >= 100;
-                  const isWarn = rawPct >= 80 && rawPct < 100;
+                  const isOver = item.budget_cents > 0 && item.used_pct >= 100;
+                  const isWarn =
+                    item.budget_cents > 0 &&
+                    item.used_pct >= 80 &&
+                    item.used_pct < 100;
                   const barColor = isOver
                     ? '#F43F5E'
                     : isWarn
                     ? '#F59E0B'
-                    : item.category_color;
+                    : item.category_color || '#6366F1';
 
                   return (
-                    <div key={item.id}>
+                    <div key={item.category_id}>
                       <div className="flex items-center justify-between text-xs mb-1.5">
                         <span className="font-medium text-[var(--text-primary)]">
                           {item.category_name}
@@ -254,8 +277,10 @@ export function OverviewScreen({
                         <span className="tabular-financial text-[var(--text-muted)]">
                           <strong className="text-[var(--text-primary)] font-semibold">
                             {formatCurrencyInline(item.spent_cents)}
-                          </strong>{' '}
-                          / {formatCurrencyInline(item.limit_cents)}
+                          </strong>
+                          {item.budget_cents > 0
+                            ? ` / ${formatCurrencyInline(item.budget_cents)} (${item.used_pct}%)`
+                            : ' (sem teto)'}
                         </span>
                       </div>
                       <div className="h-2 w-full rounded-full bg-[var(--surface-2)] overflow-hidden">
@@ -280,76 +305,52 @@ export function OverviewScreen({
             <div className="flex items-center justify-between gap-2 mb-5">
               <div>
                 <h2 className="text-base font-semibold text-[var(--text-primary)]">
-                  Transferências agendadas
+                  Principais estabelecimentos
                 </h2>
                 <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                  Próximos vencimentos previstos
+                  Onde você mais concentrou gastos no mês
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => onNavigate('scheduled')}
+                onClick={() => onNavigate('reports')}
                 className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-500 dark:text-[#c0c1ff] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
               >
-                <span>Ver todas</span>
+                <span>Relatórios</span>
                 <ChevronRight size={14} />
               </button>
             </div>
 
-            {dashboard.upcoming_scheduled.length === 0 ? (
-              <div className="py-6 text-center space-y-2">
-                <p className="text-sm text-[var(--text-muted)]">
-                  Nenhum pagamento agendado pendente.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('scheduled')}
-                  className="text-xs font-semibold text-indigo-400 hover:underline cursor-pointer"
-                >
-                  Agendar transferência
-                </button>
-              </div>
+            {dashboard.top_merchants.length === 0 ? (
+              <p className="text-sm text-[var(--text-muted)] py-6 text-center">
+                Nenhum estabelecimento registrado neste mês.
+              </p>
             ) : (
               <div className="divide-y divide-[var(--border-subtle)]">
-                {dashboard.upcoming_scheduled.map((item) => (
+                {dashboard.top_merchants.map((m) => (
                   <div
-                    key={item.id}
+                    key={m.merchant}
                     className="py-3 first:pt-0 last:pb-0 flex items-center justify-between gap-3"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <CategoryIcon
-                        slug={item.category_slug}
-                        color={item.category_color}
-                        size="sm"
-                      />
+                      <div className="w-8 h-8 rounded-full bg-[var(--surface-2)] text-[var(--text-muted)] flex items-center justify-center shrink-0">
+                        <Store size={15} />
+                      </div>
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-[var(--text-primary)] truncate">
-                          {item.title}
+                          {m.merchant}
                         </p>
-                        <p className="text-xs text-[var(--text-muted)] truncate">
-                          Vence {formatDueDateBR(item.due_date)}
-                          <span className="mx-1.5" aria-hidden="true">
-                            ·
-                          </span>
-                          {item.auto_pay ? 'Débito automático' : 'Manual'}
+                        <p className="text-xs text-[var(--text-muted)] tabular-financial">
+                          {m.count}{' '}
+                          {m.count === 1 ? 'lançamento' : 'lançamentos'}
                         </p>
                       </div>
                     </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      <CurrencyValue
-                        value={item.amount_cents}
-                        size="sm"
-                        className="text-[var(--text-primary)]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => onPayScheduled(item.id)}
-                        className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-[var(--border-strong)] text-[var(--text-primary)] hover:bg-indigo-500/12 hover:border-indigo-500/40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                      >
-                        Pagar
-                      </button>
-                    </div>
+                    <CurrencyValue
+                      value={m.total_cents}
+                      size="sm"
+                      className="text-[var(--text-primary)] shrink-0"
+                    />
                   </div>
                 ))}
               </div>
@@ -358,15 +359,15 @@ export function OverviewScreen({
         </section>
       </div>
 
-      {/* Últimos Lançamentos */}
+      {/* 5 Últimas despesas */}
       <section className="tier-1-card rounded-2xl p-5 sm:p-6">
         <div className="flex items-center justify-between gap-2 mb-4">
           <div>
             <h2 className="text-base sm:text-lg font-semibold text-[var(--text-primary)]">
-              Últimos Lançamentos
+              Últimas despesas
             </h2>
             <p className="text-xs text-[var(--text-muted)] mt-0.5">
-              Toque em qualquer item para ver detalhes ou analisar com IA
+              Toque em qualquer despesa para ver detalhes, reclassificar ou editar
             </p>
           </div>
           <button
@@ -380,11 +381,9 @@ export function OverviewScreen({
         </div>
 
         {dashboard.recent_expenses.length === 0 ? (
-          <div className="py-8 text-center">
-            <p className="text-sm text-[var(--text-muted)]">
-              Você ainda não possui lançamentos neste mês.
-            </p>
-          </div>
+          <p className="py-6 text-center text-sm text-[var(--text-muted)]">
+            Sem despesas neste mês.
+          </p>
         ) : (
           <div className="divide-y divide-[var(--border-subtle)]">
             {dashboard.recent_expenses.map((expense) => (
@@ -392,7 +391,6 @@ export function OverviewScreen({
                 key={expense.id}
                 expense={expense}
                 categories={categories}
-                onExplain={onExplainExpense}
                 onRecategorize={onRecategorize}
                 onDelete={onDeleteExpense}
                 onSelect={onSelectExpense}
